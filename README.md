@@ -11,6 +11,15 @@ pip install -r requirements.txt
 python main.py --story stories/demo_story
 ```
 
+The read-only Story Designer can be launched independently of pygame with:
+
+```bash
+python -m story_designer
+```
+
+It opens and validates Story/Core projects for browsing; editing and saving
+are intentionally deferred to the next editor phase.
+
 ## Mechanics lab
 
 Run the standalone developer test story with:
