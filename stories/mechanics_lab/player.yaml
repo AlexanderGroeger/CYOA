@@ -1,0 +1,9 @@
+stats: {hp: 60, max_hp: 60, attack: 4, defense: 2}
+inventory:
+  dev_wand: 1
+  iron_hammer: 1
+  hunter_bow: 1
+  focus_staff: 1
+  martial_wraps: 1
+equipment: {weapon: dev_wand}
+known_moves: [poised_slash, hammer_crush, rune_burst, spinning_arc, rapid_slash, flowing_combo, repeater_volley, hunter_shot, beam_focus]

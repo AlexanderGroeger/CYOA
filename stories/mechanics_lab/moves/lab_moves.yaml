@@ -1,0 +1,74 @@
+skill_progression: {evaluation_attempts: 1, promotion_average: 2.5, demotion_average: 1.5, minimum_level: 1}
+moves:
+  - id: poised_slash
+    name: "Poised Slash"
+    common: {base_power: 7, qte: {type: precision_bar, label: "Precision bar", pattern_parameters: {target_position_range: [0.42, 0.75]}}}
+    difficulty_levels:
+      0: {qte: {duration: 2.0, tuning_parameters: {critical_window: 0.04, strong_window: 0.11, weak_window: 0.22}}}
+      1: {qte: {duration: 1.7, tuning_parameters: {critical_window: 0.03, strong_window: 0.09, weak_window: 0.18}}}
+      2: {qte: {duration: 1.5, tuning_parameters: {critical_window: 0.018, strong_window: 0.06, weak_window: 0.13, speed_multiplier: 1.12}}}
+      3: {qte: {duration: 1.2, tuning_parameters: {critical_window: 0.007, strong_window: 0.03, weak_window: 0.08, speed_multiplier: 1.24}}}
+  - id: hammer_crush
+    name: "Hammer Crush"
+    common: {base_power: 11, qte: {type: charge_release, pattern_parameters: {charge_step_degrees: 15, charge_step_decrement_degrees: 1, minimum_charge_step_degrees: 3, charge_tween_duration_seconds: 0.2, release_strike_arc_start_degrees: 0, release_strike_arc_end_degrees: 25, arc_start_min_degrees: 110, arc_start_max_degrees: 130}}}
+    difficulty_levels:
+      0: {qte: {tuning_parameters: {release_delay_seconds: 0.34, swing_duration_seconds: 1.2, weak_arc_width_degrees: 22, strong_arc_width_degrees: 10, critical_arc_width_degrees: 4}}}
+      1: {qte: {tuning_parameters: {release_delay_seconds: 0.2, swing_duration_seconds: 1.0, weak_arc_width_degrees: 15, strong_arc_width_degrees: 6, critical_arc_width_degrees: 2}}}
+      2: {qte: {tuning_parameters: {release_delay_seconds: 0.16, swing_duration_seconds: 0.82, weak_arc_width_degrees: 12, strong_arc_width_degrees: 4.5, critical_arc_width_degrees: 1.5}}}
+      3: {qte: {tuning_parameters: {release_delay_seconds: 0.13, swing_duration_seconds: 0.68, weak_arc_width_degrees: 9, strong_arc_width_degrees: 3.5, critical_arc_width_degrees: 1.2}}}
+  - id: rune_burst
+    name: "Rune Burst"
+    common: {base_power: 8, qte: {type: shrinking_ring, pattern_parameters: {starting_radius: 0.48, contraction_curve: linear, target_x_variance: 0.16, target_y_variance: 0.13, ring_min_distance: 0.45}}}
+    difficulty_levels:
+      0: {qte: {duration: 1.9, tuning_parameters: {target_radius: 0.20, critical_tolerance: 0.04, strong_tolerance: 0.09, weak_tolerance: 0.17, movement_speed: 0.56}}}
+      1: {qte: {duration: 1.5, tuning_parameters: {target_radius: 0.16, critical_tolerance: 0.03, strong_tolerance: 0.07, weak_tolerance: 0.135, movement_speed: 0.66}}}
+      2: {qte: {duration: 1.34, tuning_parameters: {target_radius: 0.13, critical_tolerance: 0.022, strong_tolerance: 0.052, weak_tolerance: 0.108, movement_speed: 0.78}}}
+      3: {qte: {duration: 1.2, tuning_parameters: {target_radius: 0.105, critical_tolerance: 0.016, strong_tolerance: 0.039, weak_tolerance: 0.085, movement_speed: 0.91}}}
+  - id: spinning_arc
+    name: "Spinning Arc"
+    common: {base_power: 9, qte: {type: rotating_strike, pattern_parameters: {target_angle_range: [0, 360]}}}
+    difficulty_levels:
+      0: {qte: {duration: 4.6, tuning_parameters: {rotations: 3.0, critical_window: 4.0, strong_window: 14.0, weak_window: 34.0}}}
+      1: {qte: {duration: 4.2, tuning_parameters: {rotations: 3.0, critical_window: 3.0, strong_window: 12.0, weak_window: 30.0}}}
+      2: {qte: {duration: 3.7, tuning_parameters: {rotations: 3.4, critical_window: 2.4, strong_window: 9.5, weak_window: 24.0}}}
+      3: {qte: {duration: 3.25, tuning_parameters: {rotations: 3.8, critical_window: 1.9, strong_window: 7.5, weak_window: 19.0}}}
+  - id: rapid_slash
+    name: "Rapid Slash"
+    common: {base_power: 10, qte: {type: rapid_slash, pattern_parameters: {block_height: 0.14, block_width: 0.16, block_horizontal_offset: 0.16, block_spacing: [1, 2], half_separation_speed: 0.09, cut_gravity: 1.60, cut_horizontal_speed: 0.12, slash_animation_duration: 0.05, slash_region_vertical_position: 0.72, minimum_half_height: 0.03}}}
+    difficulty_levels:
+      0: {qte: {duration: 5.8, tuning_parameters: {block_count: 6, block_fall_speed: 0.6, slash_region_height: 0.045, strong_threshold: 4}}}
+      1: {qte: {duration: 5.5, tuning_parameters: {block_count: 8, block_fall_speed: 0.7, slash_region_height: 0.038, strong_threshold: 6}}}
+      2: {qte: {duration: 5.1, tuning_parameters: {block_count: 10, block_fall_speed: .85, slash_region_height: 0.031, strong_threshold: 7}}}
+      3: {qte: {duration: 4.75, tuning_parameters: {block_count: 12, block_fall_speed: 1.0, slash_region_height: 0.025, strong_threshold: 8}}}
+  - id: flowing_combo
+    name: "Flowing Combo"
+    common: {base_power: 7, qte: {type: directional_combo, pattern_parameters: {max_speed_multiplier: 3.0, strong_threshold_ratio: 0.70, striking_region_inset: 0.07, strike_flash_duration: 0.14, final_critical_pause: 0.35}}}
+    difficulty_levels:
+      0: {qte: {duration: 5.1, tuning_parameters: {required_hits: 8, initial_speed: 0.34, speed_increase: 0.08, striking_region_size: 0.20, target_radius: 0.027}}}
+      1: {qte: {duration: 4.8, tuning_parameters: {required_hits: 10, initial_speed: 0.40, speed_increase: 0.10, striking_region_size: 0.18, target_radius: 0.025}}}
+      2: {qte: {duration: 4.45, tuning_parameters: {required_hits: 12, initial_speed: 0.48, speed_increase: 0.115, striking_region_size: 0.155, target_radius: 0.022}}}
+      3: {qte: {duration: 4.1, tuning_parameters: {required_hits: 14, initial_speed: 0.56, speed_increase: 0.13, striking_region_size: 0.135, target_radius: 0.019}}}
+  - id: repeater_volley
+    name: "Repeater Volley"
+    common: {base_power: 8, qte: {type: rhythm_combo, pattern_parameters: {fade_duration: 0.25}}}
+    difficulty_levels:
+      0: {qte: {duration: 5.1, tuning_parameters: {tolerance: 0.17, approach_speed: 0.25}}}
+      1: {qte: {duration: 4.8, tuning_parameters: {tolerance: 0.14, approach_speed: 0.30}}}
+      2: {qte: {duration: 4.35, tuning_parameters: {tolerance: 0.105, approach_speed: 0.38}}}
+      3: {qte: {duration: 3.95, tuning_parameters: {tolerance: 0.078, approach_speed: 0.47}}}
+  - id: hunter_shot
+    name: "Hunter Shot"
+    common: {base_power: 10, qte: {type: moving_weak_point, pattern_parameters: {target_y: 0.25, target_y_variance: 0.07, launch_x: 0.50, launch_x_variance: 0.13, aim_angle: -90}}}
+    difficulty_levels:
+      0: {qte: {duration: 2.2, tuning_parameters: {target_radius: 0.17, strong_radius: 0.115, critical_radius: 0.055, speed: 0.55, aim_speed: 70, arrow_speed: 1.5}}}
+      1: {qte: {duration: 1.95, tuning_parameters: {target_radius: 0.15, strong_radius: 0.10, critical_radius: 0.045, speed: 0.66, aim_speed: 80, arrow_speed: 1.65}}}
+      2: {qte: {duration: 1.72, tuning_parameters: {target_radius: 0.14, strong_radius: 0.07, critical_radius: 0.031, speed: 0.84, aim_speed: 96, arrow_speed: 1.82}}}
+      3: {qte: {duration: 1.52, tuning_parameters: {target_radius: 0.13, strong_radius: 0.048, critical_radius: 0.021, speed: 1.04, aim_speed: 112, arrow_speed: 2.0}}}
+  - id: beam_focus
+    name: "Beam Focus"
+    common: {base_power: 9, qte: {type: stability}}
+    difficulty_levels:
+      0: {qte: {duration: 2.7, tuning_parameters: {force: 0.42, correction_speed: 1.42, center_width: 0.14}}}
+      1: {qte: {duration: 2.5, tuning_parameters: {force: 0.55, correction_speed: 1.35, center_width: 0.12}}}
+      2: {qte: {duration: 2.35, tuning_parameters: {force: 0.72, correction_speed: 1.28, center_width: 0.095}}}
+      3: {qte: {duration: 2.2, tuning_parameters: {force: 0.90, correction_speed: 1.20, center_width: 0.075}}}

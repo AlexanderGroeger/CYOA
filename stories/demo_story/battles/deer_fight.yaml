@@ -1,0 +1,26 @@
+id: deer_fight
+enemy:
+  name: "Big Buck"
+  hp: 40
+  attack: 3
+  defense: 2
+  moves:
+    - {name: "Ram", damage: [2, 5], weight: 70}
+    - {name: "Stomp", effect: "buff_attack", weight: 30}
+
+background: deer.png
+music: miniboss.mp3
+
+victory:
+  text: "The buck runs off. +5 EXP"
+  rewards:
+    variables: {gold: 5}
+    items: [wolf_pelt]
+
+defeat:
+  text: "The buck's antlers press in. You faint."
+
+on_lose:
+  type: game_over
+  music: game_over.ogg
+  text: "Game over"

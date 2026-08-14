@@ -1,0 +1,7 @@
+id: attack_hunter_shot
+text: "HUNTER SHOT\nChoose QTE difficulty."
+choices:
+  - {text: "Tutorial (level 0)", battle: lab_sequence, test_sequence: {mode: player_attack, move: hunter_shot, difficulty: 0}, on_win: attack_hunter_shot}
+  - {text: "Level 1", battle: lab_sequence, test_sequence: {mode: player_attack, move: hunter_shot, difficulty: 1}, on_win: attack_hunter_shot}
+  - {text: "Level 2", battle: lab_sequence, test_sequence: {mode: player_attack, move: hunter_shot, difficulty: 2}, on_win: attack_hunter_shot}
+  - {text: "Level 3", battle: lab_sequence, test_sequence: {mode: player_attack, move: hunter_shot, difficulty: 3}, on_win: attack_hunter_shot}

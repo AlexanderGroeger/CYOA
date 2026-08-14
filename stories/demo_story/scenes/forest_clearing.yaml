@@ -1,0 +1,75 @@
+id: forest_clearing
+background: tree.png
+music: overworld.mp3
+
+exploration:
+  cursor_speed: 170
+  # The opening dialogue changes after the desk pickup has changed profile
+  # state, without scene-specific Python logic.
+  dialog:
+    - conditions:
+        all:
+          - flag: tree_visited
+            equals: false
+      sequence: first_time
+
+  dialogue_sequences:
+    first_time:
+      - "The forest has opened up and a large tree rests at the edge of a small stream."
+    inspect_stream:
+      - "The stream babbles and shines like silver. The water is refreshing."
+    grab_acorn:
+      - "The tree drops an acorn into your hand. Somehow you know the tree did it on purpose."
+
+  navigation:
+    - battle: wolf_fight
+      label: Confront the wolf
+      on_win: cave_entrance
+      on_lose: forest_clearing
+    - scene: moose_encounter
+      label: Moose
+    - scene: deer_encounter
+      label: Deer
+      conditions:
+        all:
+          - flag: acorn_collected
+            equals: true
+
+  objects:
+    - id: acorn
+      sprite: acorn.png
+      position: [490, 50]
+      z: 12
+      visible_when:
+        all:
+          - flag: acorn_collected
+            equals: false
+      look:
+        interaction: action
+        rect: [490, 50, 50, 50]
+        event: grab_acorn
+
+  look_regions:
+    - id: stream
+      rect: [230, 310, 410, 50]
+      interaction: inspect
+      event: inspect_stream
+      priority: 2
+
+  look_events:
+    inspect_stream:
+      actions:
+        - type: dialog
+          dialog: inspect_stream
+    grab_acorn:
+      actions:
+        - type: dialog
+          dialog: grab_acorn
+        - type: sound
+          file: got_item.wav
+        - type: give_item
+          item: acorn
+          quantity: 1
+        - type: set_flag
+          flag: acorn_collected
+          value: true

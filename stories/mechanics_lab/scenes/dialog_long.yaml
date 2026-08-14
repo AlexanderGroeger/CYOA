@@ -1,0 +1,4 @@
+id: dialog_long
+background: repeating_cubes.png
+text: "A longer dialog sample follows. It has enough words to wrap and paginate on the logical 640 by 360 canvas, so it is useful for checking that text waits for the final page before controls become active.\n\nThe cue is intentionally simple: the story owns the content while the renderer owns the typewriter cadence, page breaks, and selection lockout.\n\nOnce this page is complete, return to the presentation menu and try a battle sequence to compare menu, QTE, defense, and result-report transitions."
+choices:

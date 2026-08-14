@@ -1,0 +1,10 @@
+id: ending_good
+background: treasure.txt
+ending: true
+ending_id: treasure_claimed
+text: |
+  You emerge from the woods at dusk, the gem warm in your pocket and a
+  wolf-pelt cloak over your shoulders. Whatever waited with the hoard,
+  it seems, was content to let you leave.
+
+  *** THE WHISPERING WOODS -- ENDING: The Gem Claimed ***

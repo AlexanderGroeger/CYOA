@@ -1,0 +1,19 @@
+id: mechanics_lab
+title: "Mechanics Lab"
+version: "1.0"
+start_scene: lab_menu
+display: {width: 640, height: 360}
+starting_flags: {}
+starting_variables: {}
+default_scene_background: repeating_cubes.png
+navigation: {back: history, instant_scene_text: true, instant_menu_selection: true}
+render:
+  font_size: 16
+  option_font_size: 16
+  ui:
+    text_box_alpha: 0.78
+    dialogue_position: [0.5, 0.84]
+    dialogue_size: [0.92, 0.18]
+    options_position: [0.5, 0.48]
+    highlight_option_color: [255, 214, 102]
+    selected_option_color: [18, 18, 35]

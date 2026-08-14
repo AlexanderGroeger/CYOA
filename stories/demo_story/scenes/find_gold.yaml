@@ -1,0 +1,9 @@
+id: find_gold
+background: deer.png
+text: "You spot a small pouch of gold coins caught in some roots."
+actions:
+  - add_variable: {gold: 5}
+  - play_sfx: coin.wav
+choices:
+  - text: "Return to the fork"
+    goto: path_fork

@@ -1,0 +1,13 @@
+id: player_attacks
+instant_text: true
+text: "PLAYER ATTACKS\nChoose a QTE."
+choices:
+  - {text: "Poised Slash — precision", goto: attack_poised_slash}
+  - {text: "Hammer Crush — charge/release", goto: attack_hammer_crush}
+  - {text: "Rune Burst — shrinking ring", goto: attack_rune_burst}
+  - {text: "Spinning Arc — rotating strike", goto: attack_spinning_arc}
+  - {text: "Rapid Slash — alternating cuts", goto: attack_rapid_slash}
+  - {text: "Flowing Combo — directions", goto: attack_flowing_combo}
+  - {text: "Repeater Volley — rhythm", goto: attack_repeater_volley}
+  - {text: "Hunter Shot — moving target", goto: attack_hunter_shot}
+  - {text: "Beam Focus — stability", goto: attack_beam_focus}

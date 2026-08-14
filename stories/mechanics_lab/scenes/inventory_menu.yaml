@@ -1,0 +1,4 @@
+id: inventory_menu
+text: "INVENTORY TEST MENU\nChange equipment."
+choices:
+  - {text: "Weapon equipment", goto: equipment_menu}

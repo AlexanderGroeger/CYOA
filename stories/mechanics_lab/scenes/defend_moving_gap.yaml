@@ -1,0 +1,7 @@
+id: defend_moving_gap
+text: "MOVING GAP WALL\nChoose defense difficulty."
+choices:
+  - {text: "Tutorial (level 0)", battle: lab_sequence, test_sequence: {mode: enemy_attack, move: moving_gap, difficulty: 0}, on_win: defend_moving_gap}
+  - {text: "Level 1", battle: lab_sequence, test_sequence: {mode: enemy_attack, move: moving_gap, difficulty: 1}, on_win: defend_moving_gap}
+  - {text: "Level 2", battle: lab_sequence, test_sequence: {mode: enemy_attack, move: moving_gap, difficulty: 2}, on_win: defend_moving_gap}
+  - {text: "Level 3", battle: lab_sequence, test_sequence: {mode: enemy_attack, move: moving_gap, difficulty: 3}, on_win: defend_moving_gap}

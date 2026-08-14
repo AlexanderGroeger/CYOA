@@ -1,0 +1,657 @@
+# Enemy-defense sequence library
+#
+# Each YAML document below is one standalone DefenseSequence. Copy one document
+# into a battle's defense_sequences collection, then point an enemy move's
+# defense_sequence field at its id. All coordinates are local to the arena.
+
+---
+id: training_aimed_stream
+duration: 5.0
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: aimed_stream
+    start: 0.0
+    duration: 5.0
+    origin: {x: 0.5, y: 0.0, normalized: true}
+    fire_interval: 0.52
+    targeting: player_position
+    projectile: {speed: 58, radius: 3, damage: 2, color: [255, 125, 90]}
+
+---
+id: hunter_predictive_steps
+duration: 5.4
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: predictive_stream
+    start: 0.4
+    duration: 4.6
+    origin: {x: 0.5, y: 0.0, normalized: true}
+    fire_interval: 0.50
+    prediction_strength: 0.72
+    player_velocity_weight: 0.65
+    spread: 8
+    projectile: {speed: 76, radius: 3, damage: 2, color: [255, 185, 70]}
+
+---
+id: radial_burst_crossing
+duration: 4.2
+arena: {width: 220, height: 110, player_speed: 120}
+seed: 12
+patterns:
+  - type: radial_burst
+    start: 0.50
+    duration: 2.5
+    origin: {x: 0.5, y: 0.5, normalized: true}
+    projectile_count: 10
+    burst_interval: 0.72
+    angular_offset: {min: 0, max: 20}
+    projectile: {speed: 58, radius: 3, damage: 2, color: [235, 105, 255]}
+
+---
+id: pinwheel_spiral
+duration: 6.4
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: spiral
+    start: 0.5
+    duration: 5.2
+    origin: {x: 0.5, y: 0.5, normalized: true}
+    arms: 2
+    angular_speed: 100
+    angular_acceleration: 8
+    fire_interval: 0.13
+    clockwise: true
+    projectile: {speed: 55, radius: 3, damage: 2, color: [165, 110, 255]}
+
+---
+id: narrow_gap_wall
+duration: 5.5
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: gap_wall
+    start: 0.4
+    duration: 4.6
+    direction: top_to_bottom
+    wall_speed: 46
+    spacing: 10
+    gap_width: 38
+    gap_position: {choices: [45, 110, 175]}
+    projectile: {radius: 4, damage: 3, color: [255, 90, 110]}
+
+---
+id: wandering_gap_wall
+duration: 6.0
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: moving_gap_wall
+    start: 0.4
+    duration: 5.0
+    direction: top_to_bottom
+    wall_speed: 44
+    spacing: 10
+    gap_width: 40
+    gap_position: 110
+    gap_movement: oscillate
+    gap_speed: 17
+    gap_bounds: [34, 186]
+    projectile: {radius: 4, damage: 3, color: [255, 85, 115]}
+    difficulty:
+      easy: {wall_speed: 35, gap_width: 50, gap_speed: 10}
+      hard: {wall_speed: 58, gap_width: 27, gap_speed: 27}
+
+---
+id: sweeping_beam_practice
+duration: 5.0
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: sweeping_beam
+    start: 1.0
+    duration: 2.8
+    origin: {x: 0.5, y: 0.5, normalized: true}
+    start_angle: -75
+    end_angle: 75
+    sweep_duration: 1.8
+    width: 10
+    length: 270
+    damage: 5
+    telegraph: {duration: 0.65, flash_rate: 8, alpha: 95, color: [255, 210, 80]}
+
+---
+id: lane_shuffle
+duration: 5.8
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: lane_attack
+    start: 0.4
+    duration: 4.9
+    direction: vertical
+    lane_count: 5
+    warning_duration: 0.52
+    active_duration: 0.36
+    sequence:
+      - {time: 0.0, active_lanes: [0, 2, 4]}
+      - {time: 1.0, active_lanes: [1, 3]}
+      - {time: 2.0, active_lanes: [0, 1, 4]}
+      - {time: 3.0, active_lanes: [2, 3]}
+      - {time: 4.0, active_lanes: [0, 2, 4]}
+    damage: 3
+    telegraph: {flash_rate: 9, alpha: 105}
+
+---
+id: meteor_markers
+duration: 5.4
+arena: {width: 220, height: 110, player_speed: 120}
+seed: 41
+patterns:
+  - type: telegraph_strike
+    start: 0.3
+    duration: 4.7
+    shape: circle
+    region_count: 2
+    placement_interval: 0.88
+    position: random
+    radius: 15
+    warning_duration: 0.58
+    active_duration: 0.25
+    damage: 4
+    telegraph: {flash_rate: 9, alpha: 110, color: [255, 175, 65]}
+
+---
+id: ashfall_rain
+duration: 6.0
+arena: {width: 220, height: 110, player_speed: 120}
+seed: 7
+patterns:
+  - type: falling_rain
+    start: 0.2
+    duration: 5.4
+    direction: top_to_bottom
+    spawn_interval: 0.24
+    spawn_distribution: random
+    horizontal_spread: 1.0
+    projectile:
+      speed: {min: 55, max: 72}
+      radius: 3
+      damage: 2
+      color: [255, 135, 65]
+
+---
+id: four_edge_crossfire
+duration: 6.0
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: crossfire
+    start: 0.5
+    duration: 4.9
+    sides: [left, right, top, bottom]
+    fire_interval: 0.65
+    stagger: 0.16
+    aiming: player_position
+    spread: 6
+    projectile: {speed: 54, radius: 3, damage: 2, color: [95, 185, 255]}
+
+---
+id: patient_chaser
+duration: 6.4
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: chaser
+    start: 0.8
+    duration: 4.8
+    count: 2
+    spawn_interval: 1.6
+    spawn_position: edge_random
+    speed: 42
+    turning_rate: 95
+    acceleration: 5
+    lifetime: 3.8
+    radius: 6
+    damage: 3
+    color: [130, 255, 170]
+
+---
+id: mine_herder
+duration: 6.8
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: mine
+    start: 0.4
+    duration: 5.8
+    placement: player_position
+    placement_interval: 1.05
+    warning_duration: 0.66
+    activation_radius: 14
+    persistence_duration: 1.9
+    damage: 4
+    telegraph: {flash_rate: 7, alpha: 105, color: [255, 205, 70]}
+
+---
+id: expanding_ring_escape
+duration: 5.0
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: expanding_ring
+    start: 0.7
+    duration: 3.3
+    center: {x: 0.5, y: 0.5, normalized: true}
+    starting_radius: 8
+    expansion_speed: 48
+    thickness: 7
+    gap_count: 1
+    gap_angle: {choices: [0, 90, 180, 270]}
+    damage: 4
+    telegraph: {duration: 0.45, flash_rate: 8, alpha: 95}
+
+---
+id: contracting_ring_entry
+duration: 5.0
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: contracting_ring
+    start: 0.8
+    duration: 3.2
+    center: {x: 0.5, y: 0.5, normalized: true}
+    starting_radius: 125
+    contraction_speed: 42
+    thickness: 8
+    gaps:
+      - {start_angle: 38, end_angle: 72}
+      - {start_angle: 218, end_angle: 252}
+    damage: 4
+    telegraph: {duration: 0.60, flash_rate: 8, alpha: 100}
+
+---
+id: ricochet_box
+duration: 6.5
+arena: {width: 220, height: 110, player_speed: 120}
+seed: 19
+patterns:
+  - type: bouncing_projectiles
+    start: 0.5
+    duration: 5.4
+    spawn_interval: 0.86
+    origin: {x: 0.5, y: 0.5, normalized: true}
+    initial_angle: {choices: [25, 55, 125, 155, 205, 235, 305, 335]}
+    projectile:
+      speed: 58
+      radius: 4
+      damage: 3
+      bounce_count: 4
+      lifetime: 4.5
+      color: [90, 230, 255]
+
+---
+id: curving_comets
+duration: 6.1
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: curving_projectiles
+    start: 0.4
+    duration: 5.2
+    origin: {x: 0.5, y: 0.0, normalized: true}
+    fire_interval: 0.42
+    initial_angle: 90
+    spread: 22
+    projectile:
+      speed: 64
+      radius: 3
+      damage: 3
+      color: [175, 115, 255]
+      # Optional art override: sprite: sprites/battle/fireball.png
+      # rotation_mode: velocity
+      motion: {angular_velocity: 48, angular_acceleration: 6}
+
+---
+id: accelerating_needles
+duration: 5.7
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: accelerating_stream
+    start: 0.5
+    duration: 4.7
+    origin: {x: 0.5, y: 0.0, normalized: true}
+    fire_interval: 0.44
+    targeting: player_position
+    projectile:
+      initial_speed: 30
+      acceleration: 32
+      max_speed: 110
+      radius: 3
+      damage: 3
+      color: [255, 80, 155]
+
+---
+id: wave_weave
+duration: 6.0
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: wave_stream
+    start: 0.4
+    duration: 5.2
+    origin: {x: 0.5, y: 0.0, normalized: true}
+    fire_interval: 0.26
+    direction: 90
+    phase_offset: 0.75
+    projectile:
+      forward_speed: 58
+      wave_amplitude: 16
+      wave_frequency: 1.2
+      radius: 3
+      damage: 2
+      color: [85, 205, 255]
+
+---
+id: orbiting_guard
+duration: 6.0
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: orbiting_hazards
+    start: 0.7
+    duration: 4.6
+    center: {x: 0.5, y: 0.5, normalized: true}
+    count: 4
+    orbit_radius: 34
+    angular_speed: 95
+    clockwise: true
+    hazard_radius: 5
+    damage: 3
+    color: [125, 255, 185]
+
+---
+id: squeeze_and_spiral
+duration: 7.2
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: shrinking_arena
+    start: 0.3
+    duration: 6.3
+    start_bounds: {x: 0, y: 0, width: 220, height: 110}
+    end_bounds: {x: 34, y: 18, width: 152, height: 74}
+    shrink_duration: 1.8
+    hold_duration: 2.8
+    restore_duration: 1.7
+  - type: spiral
+    start: 1.7
+    duration: 3.9
+    origin: {x: 0.5, y: 0.5, normalized: true}
+    arms: 2
+    angular_speed: 86
+    fire_interval: 0.16
+    projectile: {speed: 48, radius: 3, damage: 2, color: [210, 100, 255]}
+
+---
+id: maze_run
+duration: 7.0
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: maze_corridor
+    start: 0.4
+    duration: 6.0
+    direction: top_to_bottom
+    wall_speed: 28
+    wall_thickness: 8
+    gap_width: 40
+    segments:
+      - {time: 0.0, gap_position: 42}
+      - {time: 1.4, gap_position: 165}
+      - {time: 2.8, gap_position: 84}
+      - {time: 4.2, gap_position: 178}
+    damage: 4
+    telegraph: {duration: 0.5, flash_rate: 7, alpha: 90}
+
+---
+id: drumline_rhythm
+duration: 6.1
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: rhythm
+    start: 0.4
+    duration: 5.2
+    direction: vertical
+    lane_count: 4
+    warning_duration: 0.32
+    active_duration: 0.20
+    beats:
+      - {time: 0.0, lanes: [0, 2]}
+      - {time: 0.55, lanes: [1, 3]}
+      - {time: 1.10, lanes: [0, 1]}
+      - {time: 1.65, lanes: [2, 3]}
+      - {time: 2.20, lanes: [1, 2]}
+      - {time: 2.75, lanes: [0, 3]}
+      - {time: 3.30, lanes: [0, 2]}
+      - {time: 3.85, lanes: [1, 3]}
+      - {time: 4.40, lanes: [0, 1, 2]}
+    damage: 3
+    telegraph: {flash_rate: 10, alpha: 110}
+
+---
+id: herding_crossfire
+duration: 8.0
+arena: {width: 220, height: 110, player_speed: 120}
+pattern_groups:
+  side_pressure:
+    - type: aimed_stream
+      start: 0.0
+      duration: 2.5
+      origin: {x: 0.0, y: 0.5, normalized: true}
+      fire_interval: 0.38
+      spread: 5
+      projectile: {speed: 63, radius: 3, damage: 2, color: [255, 105, 85]}
+    - type: falling_rain
+      start: 0.7
+      duration: 1.8
+      direction: top_to_bottom
+      spawn_interval: 0.30
+      spawn_distribution: right_bias
+      projectile: {speed: 58, radius: 3, damage: 2, color: [255, 185, 75]}
+patterns:
+  - group: side_pressure
+    start: 0.5
+    repeat: {count: 2, interval: 3.2}
+
+---
+id: spiral_compression
+duration: 8.0
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: spiral
+    start: 0.7
+    duration: 5.8
+    origin: {x: 0.5, y: 0.5, normalized: true}
+    arms: 3
+    angular_speed: 96
+    fire_interval: 0.13
+    projectile: {speed: 51, radius: 3, damage: 2, color: [190, 105, 255]}
+  - type: shrinking_arena
+    start: 1.2
+    duration: 5.6
+    start_bounds: {x: 0, y: 0, width: 220, height: 110}
+    end_bounds: {x: 29, y: 15, width: 162, height: 80}
+    shrink_duration: 2.4
+    hold_duration: 2.0
+    restore_duration: 1.2
+
+---
+id: mine_chase
+duration: 8.0
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: mine
+    start: 0.5
+    duration: 6.6
+    placement: player_position
+    placement_interval: 1.05
+    warning_duration: 0.62
+    activation_radius: 13
+    persistence_duration: 2.0
+    damage: 3
+    telegraph: {flash_rate: 8, alpha: 105}
+  - type: chaser
+    start: 1.1
+    duration: 5.9
+    count: 1
+    spawn_position: edge_random
+    speed: 38
+    turning_rate: 76
+    lifetime: 5.4
+    radius: 6
+    damage: 3
+    color: [105, 245, 165]
+
+---
+id: sweeping_crossfire
+duration: 8.2
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: crossfire
+    start: 0.5
+    duration: 7.0
+    sides: [left, right]
+    fire_interval: 0.48
+    stagger: 0.24
+    aiming: fixed
+    angles: [0, 180]
+    projectile: {speed: 52, radius: 3, damage: 2, color: [85, 175, 255]}
+  - type: sweeping_beam
+    start: 2.1
+    duration: 2.8
+    origin: {x: 0.5, y: 0.5, normalized: true}
+    start_angle: -85
+    end_angle: 85
+    sweep_duration: 1.65
+    width: 10
+    length: 270
+    damage: 5
+    telegraph: {duration: 0.62, flash_rate: 8, alpha: 100}
+  - type: sweeping_beam
+    start: 5.2
+    duration: 2.4
+    origin: {x: 0.5, y: 0.5, normalized: true}
+    start_angle: 85
+    end_angle: -85
+    sweep_duration: 1.35
+    width: 10
+    length: 270
+    damage: 5
+    telegraph: {duration: 0.50, flash_rate: 9, alpha: 100}
+
+---
+id: moving_corridor
+duration: 7.6
+arena: {width: 220, height: 110, player_speed: 120}
+patterns:
+  - type: moving_gap_wall
+    start: 0.5
+    duration: 6.4
+    direction: top_to_bottom
+    wall_speed: 31
+    spacing: 9
+    gap_width: 54
+    gap_position: 62
+    gap_movement: oscillate
+    gap_speed: 18
+    gap_bounds: [30, 190]
+    projectile: {radius: 4, damage: 3, color: [255, 95, 110]}
+  - type: moving_gap_wall
+    start: 0.9
+    duration: 6.0
+    direction: bottom_to_top
+    wall_speed: 31
+    spacing: 9
+    gap_width: 54
+    gap_position: 158
+    gap_movement: oscillate
+    gap_speed: 18
+    gap_bounds: [30, 190]
+    projectile: {radius: 4, damage: 3, color: [255, 115, 130]}
+
+---
+id: burst_rhythm
+duration: 7.4
+arena: {width: 220, height: 110, player_speed: 120}
+pattern_groups:
+  alternating_spokes:
+    - type: radial_burst
+      start: 0.0
+      duration: 0.20
+      origin: {x: 0.5, y: 0.5, normalized: true}
+      projectile_count: 8
+      angular_offset: 0
+      projectile: {speed: 54, radius: 3, damage: 2, color: [210, 110, 255]}
+    - type: radial_burst
+      start: 0.48
+      duration: 0.20
+      origin: {x: 0.5, y: 0.5, normalized: true}
+      projectile_count: 8
+      angular_offset: 22.5
+      projectile: {speed: 54, radius: 3, damage: 2, color: [130, 195, 255]}
+patterns:
+  - group: alternating_spokes
+    start: 0.8
+    repeat: {count: 5, interval: 1.15}
+
+---
+id: obsidian_choir_boss
+duration: 12.0
+arena: {width: 220, height: 110, player_speed: 125}
+seed: 88
+pattern_groups:
+  choir_pulse:
+    - type: radial_burst
+      start: 0.0
+      duration: 0.18
+      origin: {x: 0.5, y: 0.5, normalized: true}
+      projectile_count: 12
+      angular_offset: {choices: [0, 15]}
+      projectile: {speed: 56, radius: 3, damage: 2, color: [205, 100, 255]}
+    - type: lane_attack
+      start: 0.18
+      duration: 0.72
+      direction: vertical
+      lane_count: 5
+      active_lanes: {choices: [[0, 2, 4], [1, 3]]}
+      warning_duration: 0.42
+      active_duration: 0.22
+      damage: 3
+      telegraph: {flash_rate: 9, alpha: 100}
+patterns:
+  - type: shrinking_arena
+    start: 0.6
+    duration: 10.7
+    start_bounds: {x: 0, y: 0, width: 220, height: 110}
+    end_bounds: {x: 20, y: 10, width: 180, height: 90}
+    shrink_duration: 3.0
+    hold_duration: 5.4
+    restore_duration: 2.3
+  - type: spiral
+    start: 1.0
+    duration: 8.4
+    origin: {x: 0.5, y: 0.5, normalized: true}
+    arms: 2
+    angular_speed: 110
+    fire_interval: 0.16
+    projectile: {speed: 50, radius: 3, damage: 2, color: [180, 90, 255]}
+  - group: choir_pulse
+    start: 1.5
+    repeat: {count: 6, interval: 1.35}
+  - type: mine
+    start: 4.3
+    duration: 5.6
+    placement: player_position
+    placement_interval: 1.20
+    warning_duration: 0.60
+    activation_radius: 13
+    persistence_duration: 1.7
+    damage: 3
+    telegraph: {flash_rate: 8, alpha: 100}
+  - type: sweeping_beam
+    start: 8.6
+    duration: 2.8
+    origin: {x: 0.5, y: 0.5, normalized: true}
+    start_angle: -65
+    end_angle: 65
+    sweep_duration: 1.65
+    width: 9
+    length: 270
+    damage: 5
+    telegraph: {duration: 0.65, flash_rate: 10, alpha: 105}

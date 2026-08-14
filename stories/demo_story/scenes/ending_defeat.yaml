@@ -1,0 +1,8 @@
+id: ending_defeat
+background: fork.txt
+ending: true
+ending_id: defeated_by_wolf
+text: |
+  The wolf proves too much for you. You never do find out what waits deeper in the Whispering Woods.
+
+  *** THE WHISPERING WOODS -- ENDING: Defeated ***

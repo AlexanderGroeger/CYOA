@@ -1,0 +1,11 @@
+id: forest_events
+chance: 1
+events:
+  - id: deer_encounter
+    weight: 60
+
+  - id: moose_encounter
+    weight: 30
+
+  - id: bear_encounter
+    weight: 10

@@ -1,0 +1,6 @@
+id: bear_encounter
+ending: true
+ending_id: eaten_by_bear
+background: bear.png
+text: |
+  A bear jumps out in front of you and eats you.

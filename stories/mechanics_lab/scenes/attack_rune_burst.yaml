@@ -1,0 +1,7 @@
+id: attack_rune_burst
+text: "RUNE BURST\nChoose QTE difficulty."
+choices:
+  - {text: "Tutorial (level 0)", battle: lab_sequence, test_sequence: {mode: player_attack, move: rune_burst, difficulty: 0}, on_win: attack_rune_burst}
+  - {text: "Level 1", battle: lab_sequence, test_sequence: {mode: player_attack, move: rune_burst, difficulty: 1}, on_win: attack_rune_burst}
+  - {text: "Level 2", battle: lab_sequence, test_sequence: {mode: player_attack, move: rune_burst, difficulty: 2}, on_win: attack_rune_burst}
+  - {text: "Level 3", battle: lab_sequence, test_sequence: {mode: player_attack, move: rune_burst, difficulty: 3}, on_win: attack_rune_burst}

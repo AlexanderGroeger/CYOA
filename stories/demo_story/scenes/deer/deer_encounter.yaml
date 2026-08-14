@@ -1,0 +1,12 @@
+id: deer_encounter
+background: deer.png
+text: |
+  A buck jumps out in front of you. What do you do?
+choices:
+  - text: "Fight"
+    battle: deer_fight
+    on_win: cave_entrance
+  - text: "Pet"
+    goto: deer_pet
+  - text: "Run"
+    goto: deer_run

@@ -1,0 +1,39 @@
+{
+  "save_format_version": 1,
+  "story_id": "demo_story",
+  "story_version": "1.0",
+  "timestamp": 1785093183.9619107,
+  "state": {
+    "current_scene": "cave_entrance",
+    "flags": {
+      "story_started": true
+    },
+    "variables": {
+      "gold": 5
+    },
+    "inventory": {
+      "field_ration": 1,
+      "wolf_pelt": 1
+    },
+    "stats": {
+      "hp": 12,
+      "max_hp": 20,
+      "attack": 4,
+      "defense": 2
+    },
+    "equipment": {
+      "weapon": "trail_sword"
+    },
+    "known_moves": [
+      "poised_slash",
+      "hammer_crush"
+    ],
+    "history": [
+      "intro",
+      "forest_clearing",
+      "path_fork",
+      "cave_entrance"
+    ],
+    "ending_reached": null
+  }
+}

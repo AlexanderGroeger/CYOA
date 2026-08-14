@@ -1,0 +1,104 @@
+{
+  "save_format_version": 1,
+  "story_id": "mechanics_lab",
+  "story_version": "1.0",
+  "timestamp": 1786325218.012244,
+  "state": {
+    "current_scene": "lab_menu",
+    "flags": {},
+    "variables": {
+      "test_mode": "player_attack",
+      "test_subject": "Flowing Combo",
+      "test_difficulty": 3,
+      "test_performance": "Weak",
+      "test_damage": 6,
+      "test_damage_taken": 0
+    },
+    "inventory": {
+      "dev_wand": 1,
+      "iron_hammer": 1,
+      "hunter_bow": 1,
+      "focus_staff": 1,
+      "martial_wraps": 1
+    },
+    "stats": {
+      "hp": 60,
+      "max_hp": 60,
+      "attack": 4,
+      "defense": 2
+    },
+    "equipment": {
+      "weapon": "dev_wand"
+    },
+    "known_moves": [
+      "poised_slash",
+      "hammer_crush",
+      "rune_burst",
+      "spinning_arc",
+      "rapid_slash",
+      "flowing_combo",
+      "repeater_volley",
+      "hunter_shot",
+      "beam_focus"
+    ],
+    "known_combat_moves": {
+      "poised_slash": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "hammer_crush": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "rune_burst": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "spinning_arc": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "rapid_slash": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "flowing_combo": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "repeater_volley": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "hunter_shot": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "beam_focus": {
+        "current_level": 1,
+        "recent_scores": []
+      }
+    },
+    "history": [
+      "lab_menu",
+      "player_attacks",
+      "attack_rapid_slash",
+      "attack_rapid_slash",
+      "attack_rapid_slash",
+      "attack_rapid_slash",
+      "attack_rapid_slash",
+      "attack_rapid_slash",
+      "attack_rapid_slash",
+      "attack_rapid_slash",
+      "player_attacks",
+      "attack_rapid_slash",
+      "attack_rapid_slash",
+      "player_attacks",
+      "attack_flowing_combo",
+      "attack_flowing_combo",
+      "player_attacks",
+      "lab_menu"
+    ],
+    "ending_reached": null
+  }
+}

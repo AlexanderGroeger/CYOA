@@ -1,0 +1,97 @@
+id: lab_sequence
+test_sequences_restore_hp: false
+background: repeating_cubes.png
+music: rude_buster.ogg
+enemy: {name: "Training Heart", hp: 999, attack: 1, defense: 0, sprite: heart.png}
+arena: {x: 210, y: 145, width: 220, height: 105, player_speed: 135}
+enemy_patterns:
+  - id: aimed_stream
+    duration: 5.0
+    seed: 11
+    player: {invulnerability_time: 0.55}
+    patterns:
+      - type: aimed_stream
+        start: 1.0
+        duration: 4.0
+        origin: {x: 0.5, y: 0.0, normalized: true}
+        fire_interval: 0.42
+        projectile: {speed: 68, radius: 3, damage: 2, color: [255, 130, 130]}
+        difficulty:
+          0: {fire_interval: 0.60, projectile: {speed: 52, damage: 1}}
+          2: {fire_interval: 0.32, projectile: {speed: 82, damage: 3}}
+          3: {fire_interval: 0.24, projectile: {speed: 98, damage: 4}}
+  - id: moving_gap
+    duration: 5.5
+    seed: 12
+    patterns:
+      - type: moving_gap_wall
+        start: 1.0
+        duration: 4.5
+        direction: top_to_bottom
+        wall_speed: 42
+        wall_thickness: 9
+        gap_width: 56
+        gap_position: 110
+        gap_movement: oscillate
+        gap_speed: 14
+        gap_bounds: [30, 190]
+        damage: 2
+        color: [110, 160, 255]
+        difficulty:
+          0: {wall_speed: 32, gap_width: 70, gap_speed: 8, damage: 1}
+          2: {wall_speed: 54, gap_width: 42, gap_speed: 22, damage: 3}
+          3: {wall_speed: 66, gap_width: 30, gap_speed: 30, damage: 4}
+  - id: radial_burst
+    duration: 5.0
+    seed: 13
+    patterns:
+      - type: radial_burst
+        start: 1.0
+        duration: 4.0
+        center: {x: 0.5, y: 0.5, normalized: true}
+        projectile_count: 8
+        burst_interval: 1.0
+        projectile: {speed: 64, radius: 4, damage: 2, color: [235, 190, 85]}
+        repetitions: 5
+        bursts:
+          - initial_rotation_angle: [-30, -10]
+            orbital_speed: 30
+            projectile: {color: [85, 190, 235]}
+          - initial_rotation_angle: [10, 30]
+            orbital_speed: -30
+            projectile: {color: [235, 190, 85]}
+        difficulty:
+          0: {projectile_count: 6, burst_interval: 1.25, projectile: {speed: 50, damage: 1}}
+          2: {projectile_count: 10, burst_interval: 0.78, projectile: {speed: 78, damage: 3}}
+          3: {projectile_count: 12, burst_interval: 0.62, projectile: {speed: 90, damage: 4}}
+  - id: sweeping_beam
+    duration: 5.2
+    seed: 14
+    patterns:
+      - type: sweeping_beam
+        start: 1.0
+        duration: 4.2
+        origin: {x: 0.5, y: 0.5, normalized: true}
+        start_angle: 0
+        end_angle: 360
+        sweep_duration: 3.4
+        length: 150
+        width: 8
+        damage: 2
+        telegraph: {duration: 0.55, flash_rate: 7, color: [255, 210, 80]}
+        difficulty:
+          0: {sweep_duration: 4.0, width: 6, damage: 1}
+          2: {sweep_duration: 2.7, width: 11, damage: 3}
+          3: {sweep_duration: 2.1, width: 14, damage: 4}
+enemy_moves:
+  - {id: aimed_stream, name: "Aimed Stream", pattern: aimed_stream, weight: 1, telegraph_duration: 0.4}
+  - {id: moving_gap, name: "Moving Gap Wall", pattern: moving_gap, weight: 1, telegraph_duration: 0.4}
+  - {id: radial_burst, name: "Radial Burst", pattern: radial_burst, weight: 1, telegraph_duration: 0.4}
+  - {id: sweeping_beam, name: "Sweeping Beam", pattern: sweeping_beam, weight: 1, telegraph_duration: 0.4}
+initial_enemy_moves: [aimed_stream, moving_gap, radial_burst, sweeping_beam]
+victory: {text: "Sequence complete."}
+defeat: {text: "Sequence halted."}
+on_lose:
+  type: game_over
+  music: game_over.ogg
+  text: "Game over"

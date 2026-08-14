@@ -1,0 +1,211 @@
+# A complete modern battle example.  All timings are seconds and arena
+# coordinates use the story's logical 640x360 game surface.
+id: wolf_fight
+background: forest.png
+music: rude_buster.ogg
+
+enemy:
+  name: "Grey Wolf"
+  hp: 50
+  attack: 3
+  defense: 1
+  # Opponent images are loaded from assets/sprites and centered in battle.
+  sprite: wolf.png
+
+arena:
+  x: 210
+  y: 145
+  width: 220
+  height: 105
+  player_speed: 125
+
+enemy_patterns:
+  - id: falling_shards
+    duration: 4.0
+    attack_delay: 0.25
+    player: {invulnerability_time: 0.55}
+    timeline:
+      - at: 0.25
+        action: spawn_repeated
+        repeat: {count: 9, interval: 0.33}
+        projectile:
+          shape: rectangle
+          size: [7, 15]
+          spawn: {edge: top, x: random}
+          velocity: {x: 0, y: 90}
+          damage: 3
+          lifetime: 2.0
+
+  - id: ring_pulse
+    duration: 4.2
+    attack_delay: 0.25
+    player: {invulnerability_time: 0.5}
+    timeline:
+      - at: 0.45
+        action: spawn_radial
+        count: 8
+        spawn: {origin: [320, 197]}
+        projectile:
+          shape: circle
+          size: 8
+          speed: 72
+          damage: 2
+          lifetime: 2.2
+      - at: 2.2
+        action: spawn_repeated
+        repeat: {count: 4, interval: 0.35}
+        projectile:
+          shape: circle
+          size: 9
+          behavior: toward_player
+          spawn: {edge: left, y: random}
+          speed: 76
+          damage: 3
+          lifetime: 2.0
+
+  # A modern concurrent defense sequence unlocked when the wolf is cornered.
+  # The moving opening demands positioning while the shots punish standing still.
+  - id: moonlit_hunt
+    duration: 6.0
+    attack_delay: 0.25
+    player: {invulnerability_time: 0.55}
+    patterns:
+      - type: predictive_stream
+        start: 0.0
+        duration: 4.8
+        origin: {x: 0.5, y: 0.0, normalized: true}
+        fire_interval: 0.52
+        prediction_strength: 0.55
+        player_velocity_weight: 0.70
+        spread: 7
+        projectile:
+          speed: 80
+          radius: 3
+          damage: 3
+          color: [190, 125, 255]
+      - type: moving_gap_wall
+        start: 1.0
+        duration: 4.6
+        direction: bottom_to_top
+        wall_speed: 38
+        wall_thickness: 9
+        gap_width: 52
+        gap_position: 110
+        gap_movement: oscillate
+        gap_speed: 16
+        gap_bounds: [35, 185]
+        damage: 3
+        color: [110, 160, 255]
+
+enemy_moves:
+  - id: shard_fall
+    name: "Falling Shards"
+    pattern: falling_shards
+    weight: 3
+    no_immediate_repeat: true
+    cooldown: 1
+  - id: echo_ring
+    name: "Echo Ring"
+    pattern: ring_pulse
+    weight: 2
+    no_immediate_repeat: true
+  - id: moonlit_hunt
+    name: "Moonlit Hunt"
+    pattern: moonlit_hunt
+    weight: 2
+    no_immediate_repeat: true
+
+# Moonlit Hunt is added only by the desperate phase.
+initial_enemy_moves: [shard_fall, echo_ring]
+
+dialogue:
+  - trigger: battle_start
+    text: "The wolf circles warily. Its coat bristles in the moonlight."
+    type: environment
+  - trigger: turn_start
+    text: "Wet leaves shift beneath your feet as the forest falls quiet."
+    type: environment
+    once: false
+  - trigger: turn_start
+    when: {phase: desperate_wolf}
+    text: "The moonlight dims; the forest's echoes gather around the cornered wolf."
+    type: environment
+    once: false
+  - trigger: after_player_action
+    text: "The wolf flinches, then bares its teeth."
+    type: opponent
+    # The pause begins after the type-on animation finishes, before defense.
+    pause: 2.25
+    once: false
+  - trigger: phase_transition
+    when: {phase: desperate_wolf}
+    text: "Cornered, the wolf calls on the forest's echoes!"
+  - trigger: player_low_health
+    text: "Your footing slips. Choose your next step carefully."
+
+on_lose:
+  type: determined_revival
+  dialogue:
+    - speaker: narrator
+      text: "Having come this far only to fail now?"
+    - speaker: narrator
+      text: "No."
+    - speaker: narrator
+      text: "The world still needs a hero,"
+    - speaker: narrator
+      text: "and its you."
+    - speaker: narrator
+      text: "Failure?"
+    - speaker: narrator
+      text: "It's not an option."
+    - speaker: narrator
+      text: "You are filled determination."
+    - speaker: narrator
+      text: "Death?"
+    - speaker: narrator
+      text: "You refused."
+  enemy_message:
+    speaker: enemy
+    text: "The wolf recoils. How are you still standing?"
+  next_phase: determined_wolf
+  revived_hp: 1
+  game_over:
+    music: game_over.ogg
+    text: "Game over"
+
+phases:
+  - id: desperate_wolf
+    name: "Desperate Wolf"
+    when: {enemy_hp_ratio_lte: 0.50}
+    actions:
+      - augment_player_move:
+          move: poised_slash
+          fields: {base_power_add: 2, timing_window_multiplier: 0.85}
+      - augment_enemy_pattern:
+          pattern: ring_pulse
+          fields: {projectile_count_add: 4, projectile_speed_multiplier: 1.12}
+      - add_enemy_move: moonlit_hunt
+      - set_fight_flag: {wolf_desperate: true}
+  - id: determined_wolf
+    name: "Determined Wolf"
+    # Entered directly by on_lose rather than through normal condition checks.
+    when: {fight_flag: never_auto_activate}
+    actions:
+      - set_background: forest_angry.png
+      - set_enemy_sprite: wolf_angry.png
+      - augment_enemy_pattern:
+          pattern: falling_shards
+          fields: {projectile_speed_multiplier: 1.18, damage_add: 1}
+      - augment_enemy_pattern:
+          pattern: ring_pulse
+          fields: {projectile_count_add: 3, projectile_speed_multiplier: 1.15}
+      - set_fight_flag: {wolf_determined: true}
+
+victory:
+  text: "The wolf yelps and bolts into the underbrush, leaving something behind."
+  rewards:
+    variables: {gold: 5}
+    items: [wolf_pelt]
+
+defeat:
+  text: "The wolf proves too strong. Everything goes dark..."

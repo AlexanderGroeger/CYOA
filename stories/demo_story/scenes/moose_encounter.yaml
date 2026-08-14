@@ -1,0 +1,6 @@
+id: moose_encounter
+ending: true
+ending_id: mauled_by_moose
+background: moose.png
+text: |
+  A moose jumps out in front of you and mauls you.

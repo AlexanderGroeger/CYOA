@@ -1,0 +1,7 @@
+id: deer_run
+background: deer.png
+text: |
+  You run away. The buck looks at you sideways.
+choices:
+  - text: "Return to the fork"
+    goto: path_fork

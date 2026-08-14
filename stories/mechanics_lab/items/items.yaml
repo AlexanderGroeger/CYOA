@@ -1,0 +1,30 @@
+dev_wand:
+  name: "Developer Wand"
+  description: "Grants every lab technique."
+  type: weapon
+  equipment: {bonuses: {attack: 2}}
+  combat: {move_grants: [poised_slash, hammer_crush, rune_burst, spinning_arc, rapid_slash, flowing_combo, repeater_volley, hunter_shot, beam_focus]}
+iron_hammer:
+  name: "Iron Hammer"
+  description: "A heavy weapon for checking equipment bonuses."
+  type: weapon
+  equipment: {bonuses: {attack: 3}}
+  combat: {move_grants: [hammer_crush]}
+hunter_bow:
+  name: "Hunter Bow"
+  description: "A bow for moving-target tests."
+  type: weapon
+  equipment: {bonuses: {attack: 2}}
+  combat: {move_grants: [hunter_shot]}
+focus_staff:
+  name: "Focus Staff"
+  description: "A staff for rune and stability tests."
+  type: weapon
+  equipment: {bonuses: {attack: 1}}
+  combat: {move_grants: [rune_burst, beam_focus]}
+martial_wraps:
+  name: "Martial Wraps"
+  description: "Weighted wraps for directional-combo tests."
+  type: weapon
+  equipment: {bonuses: {attack: 1}}
+  combat: {move_grants: [flowing_combo]}

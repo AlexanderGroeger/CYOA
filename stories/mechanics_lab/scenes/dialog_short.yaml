@@ -1,0 +1,4 @@
+id: dialog_short
+background: repeating_cubes.png
+text: "The river surface ripples once.\n\nThis compact line is useful for checking typewriter timing, dialog blips, and the transition back to a nested menu."
+choices:

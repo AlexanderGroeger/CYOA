@@ -1,0 +1,16 @@
+id: path_fork
+background: fork.txt
+sprite: wolf.txt
+sprite_position: [26, 0]
+text: |
+  The path splits. To the left, it winds off into dense, quiet brush.
+  To the right, a grey wolf stands its ground squarely in the middle of
+  the trail, watching you without blinking.
+choices:
+  - text: "Search the left path"
+    random_event: forest_events
+  - text: "Confront the wolf blocking the right path"
+    battle: wolf_fight
+    on_win: cave_entrance
+  - text: "Turn back to the clearing"
+    goto: forest_clearing

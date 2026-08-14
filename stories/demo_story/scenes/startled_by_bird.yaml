@@ -1,0 +1,6 @@
+id: startled_by_bird
+background: bear.png
+text: "A bird bursts from the underbrush, startling you -- but nothing more comes of it."
+choices:
+  - text: "Return to the fork"
+    goto: path_fork

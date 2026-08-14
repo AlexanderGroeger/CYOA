@@ -1,0 +1,80 @@
+{
+  "save_format_version": 1,
+  "story_id": "demo_story",
+  "story_version": "1.0",
+  "timestamp": 1786397559.3119419,
+  "state": {
+    "current_scene": "intro",
+    "flags": {
+      "story_started": true
+    },
+    "variables": {
+      "gold": 0
+    },
+    "inventory": {
+      "field_ration": 1
+    },
+    "stats": {
+      "hp": 10,
+      "max_hp": 10,
+      "attack": 4,
+      "defense": 2
+    },
+    "equipment": {
+      "weapon": "dev_wand"
+    },
+    "known_moves": [
+      "poised_slash",
+      "hammer_crush",
+      "rune_burst",
+      "spinning_arc",
+      "rapid_slash",
+      "flowing_combo",
+      "repeater_volley",
+      "hunter_shot",
+      "beam_focus"
+    ],
+    "known_combat_moves": {
+      "poised_slash": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "hammer_crush": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "rune_burst": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "spinning_arc": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "rapid_slash": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "flowing_combo": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "repeater_volley": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "hunter_shot": {
+        "current_level": 1,
+        "recent_scores": []
+      },
+      "beam_focus": {
+        "current_level": 1,
+        "recent_scores": []
+      }
+    },
+    "history": [
+      "intro"
+    ],
+    "ending_reached": null
+  }
+}

@@ -1,0 +1,7 @@
+id: enemy_attacks
+text: "ENEMY ATTACK / DEFENSE TESTS\nChoose a dodge pattern."
+choices:
+  - {text: "Aimed Stream", goto: defend_aimed_stream}
+  - {text: "Moving Gap Wall", goto: defend_moving_gap}
+  - {text: "Radial Burst", goto: defend_radial_burst}
+  - {text: "Sweeping Beam", goto: defend_sweeping_beam}

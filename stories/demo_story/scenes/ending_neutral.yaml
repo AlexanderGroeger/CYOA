@@ -1,0 +1,9 @@
+id: ending_neutral
+background: forest.txt
+ending: true
+ending_id: walked_away
+text: |
+  You leave the gem where it lies. Some part of you suspects that was the
+  wiser choice -- the woods feel lighter behind you as you go.
+
+  *** THE WHISPERING WOODS -- ENDING: Walked Away ***

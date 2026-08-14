@@ -1,0 +1,27 @@
+id: demo_story
+title: "The Whispering Woods"
+version: "1.0"
+start_scene: forest_clearing
+
+# Logical pygame canvas.  It is integer-scaled and letterboxed on the
+# player's fullscreen desktop display.
+display:
+  width: 640
+  height: 360
+
+starting_flags: {}
+starting_variables:
+  gold: 0
+
+render:
+  # Normal dialogue font size on the logical game surface.
+  font_size: 24
+  option_font_size: 16
+  ui:
+    # All positions and sizes are fractions of the logical game surface.
+    text_box_alpha: 0.75
+    dialogue_position: [0.5, 0.84]
+    dialogue_size: [0.92, 0.18]
+    options_position: [0.5, 0.50]
+    highlight_option_color: [255, 214, 102]
+    selected_option_color: [18, 18, 35]

@@ -1,0 +1,8 @@
+id: hidden_torch
+background: moose.png
+text: "Tucked beneath a fallen log, you spot an old but usable torch."
+actions:
+  - add_item: torch
+choices:
+  - text: "Return to the fork"
+    goto: path_fork

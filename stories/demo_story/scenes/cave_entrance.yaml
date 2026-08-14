@@ -1,0 +1,12 @@
+id: cave_entrance
+background: cave.png
+text: |
+  Past the fork, the trail ends abruptly at a dark cave mouth, cool air
+  drifting out from within. You can't see more than a few feet in
+  without some kind of light.
+choices:
+  - text: "Light your torch and head into the cave"
+    condition: "has_item('torch')"
+    goto: treasure_room
+  - text: "Head back and search for a light source"
+    goto: path_fork

@@ -1,0 +1,13 @@
+id: intro
+checkpoint: true
+background: trailhead.png
+text_fg: [255, 255, 255]
+text_bg: [8, 8, 24]
+text: |
+  You stand at the edge of the Whispering Woods, an old pack slung over your shoulder. The trees ahead seem to lean in, as if listening.
+  Somewhere in these woods, locals say, an ancient hoard still waits. Fewer say what waits with it.
+actions:
+  - set_flag: {story_started: true}
+choices:
+  - text: "Step into the woods"
+    random_event: forest_events

@@ -1,0 +1,17 @@
+# Starting player state is independent of individual encounters.  A move must
+# be listed here *and* granted by the equipped weapon to appear in battle.
+stats:
+  hp: 10
+  max_hp: 10
+  attack: 4
+  defense: 2
+
+# Bag grid dimensions for the opt-in exploration reference scenes.  The
+# default story route does not enter exploration, so its narrative flow stays
+# unchanged.
+inventory_ui: {columns: 4, rows: 3}
+inventory: [field_ration]
+equipment:
+  weapon: dev_wand
+
+known_moves: [poised_slash, hammer_crush, rune_burst, spinning_arc, rapid_slash, flowing_combo, repeater_volley, hunter_shot, beam_focus, rapid_slash]

@@ -1,0 +1,7 @@
+id: presentation_menu
+music: true_hero_intro.ogg
+text: "DIALOGUE & PRESENTATION\nChoose a presentation test."
+choices:
+  - {text: "Short dialog cue", goto: dialog_short, actions: [{play_sfx: dialog_loud.wav}]}
+  - {text: "Multi-page dialog cue", goto: dialog_long, actions: [{play_sfx: dialog_page_finished.wav}]}
+  - {text: "Attack/defense animation lab", goto: player_attacks}

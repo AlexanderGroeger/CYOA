@@ -1,0 +1,7 @@
+id: attack_hammer_crush
+text: "HAMMER CRUSH\nChoose QTE difficulty."
+choices:
+  - {text: "Tutorial (level 0)", battle: lab_sequence, test_sequence: {mode: player_attack, move: hammer_crush, difficulty: 0}, on_win: attack_hammer_crush}
+  - {text: "Level 1", battle: lab_sequence, test_sequence: {mode: player_attack, move: hammer_crush, difficulty: 1}, on_win: attack_hammer_crush}
+  - {text: "Level 2", battle: lab_sequence, test_sequence: {mode: player_attack, move: hammer_crush, difficulty: 2}, on_win: attack_hammer_crush}
+  - {text: "Level 3", battle: lab_sequence, test_sequence: {mode: player_attack, move: hammer_crush, difficulty: 3}, on_win: attack_hammer_crush}

@@ -1,0 +1,9 @@
+id: lab_menu
+checkpoint: true
+music: true_hero.ogg
+text: "MECHANICS LAB\nChoose a system to test."
+choices:
+  - {text: "Player attacks", goto: player_attacks}
+  - {text: "Enemy attacks / defend patterns", goto: enemy_attacks}
+  - {text: "Inventory & equipment", goto: inventory_menu}
+  - {text: "Dialogue & presentation", goto: presentation_menu}

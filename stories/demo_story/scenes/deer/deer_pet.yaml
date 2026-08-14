@@ -1,0 +1,8 @@
+id: deer_pet
+background: deer.png
+text: |
+  You pet him... His fur feels like pine needles.
+  The buck snorts and walks off. Time to go.
+choices:
+  - text: "Return to the fork"
+    goto: path_fork

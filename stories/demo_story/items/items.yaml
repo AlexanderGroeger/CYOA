@@ -1,0 +1,149 @@
+torch:
+  name: "Torch"
+  description: "A sturdy wooden torch. Useful for lighting dark places like caves."
+
+treasure_gem:
+  name: "Glowing Gem"
+  description: "A gem that pulses faintly with light. Clearly valuable."
+
+wolf_pelt:
+  name: "Wolf Pelt"
+  description: "A trophy from the wolf you defeated."
+
+field_ration:
+  name: "Field Ration"
+  description: "A wrapped meal that restores a little health."
+  type: consumable
+  combat:
+    usable: true
+    consume_turn: true
+    effects:
+      - heal: 8
+
+trail_sword:
+  name: "Trail Sword"
+  description: "A balanced blade carried for woodland travel."
+  type: weapon
+  equipment:
+    bonuses: {attack: 1}
+  combat:
+    move_grants: [poised_slash]
+
+moon_blade:
+  name: "Moon Blade"
+  description: "A ceremonial weapon for advanced techniques."
+  type: weapon
+  equipment:
+    bonuses: {attack: 3}
+  combat:
+    move_grants: [poised_slash, crescent_lunge, spinning_arc]
+
+duelist_blade:
+  name: "Duelist Blade"
+  description: "A light, responsive sword made for relentless alternating cuts."
+  type: weapon
+  equipment:
+    bonuses: {attack: 3}
+  combat:
+    move_grants: [rapid_slash]
+
+iron_hammer:
+  name: "Iron Hammer"
+  description: "A weighty hammer built for committed swings."
+  type: weapon
+  equipment:
+    bonuses: {attack: 3}
+  combat:
+    move_grants: [hammer_crush]
+
+hunter_bow:
+  name: "Hunter Bow"
+  description: "A quiet bow suited to picking out moving weak points."
+  type: weapon
+  equipment:
+    bonuses: {attack: 2}
+  combat:
+    move_grants: [hunter_shot]
+
+rune_pistol:
+  name: "Rune Pistol"
+  description: "A rune-powered sidearm that rewards a steady cadence."
+  type: weapon
+  equipment:
+    bonuses: {attack: 2}
+  combat:
+    move_grants: [repeater_volley]
+
+focus_staff:
+  name: "Focus Staff"
+  description: "A staff for aligning runes and maintaining focused beams."
+  type: weapon
+  equipment:
+    bonuses: {attack: 1}
+  combat:
+    move_grants: [rune_burst, beam_focus]
+
+martial_wraps:
+  name: "Martial Wraps"
+  description: "Weighted hand wraps for rapid, flowing combinations."
+  type: weapon
+  equipment:
+    bonuses: {attack: 1}
+  combat:
+    move_grants: [flowing_combo]
+
+dev_wand:
+  name: "Developer Wand"
+  description: "A glitchy wand that yields limitless power"
+  type: weapon
+  equipment:
+    bonuses: {attack: 2}
+  combat:
+    move_grants: [poised_slash, hammer_crush, rune_burst, spinning_arc, rapid_slash, flowing_combo, repeater_volley, hunter_shot, beam_focus, rapid_slash]
+
+acorn:
+  name: "Acorn"
+  description: "A small, humble acorn."
+  icon: acorn.png
+  type: key
+  actions: [toss]
+# The following catalog entries are used only by the opt-in exploration
+# reference scenes under scenes/exploration_demo/.  They intentionally use
+# one existing heart icon so the example stays self-contained.
+ember_seal:
+  name: "Ember Seal"
+  description: "A warm brass seal stamped with the mark of the old archive."
+  icon: heart.png
+  type: key
+  stats: {hp: 0, attack: 0, defense: 0}
+  actions: []
+
+restorative_tea:
+  name: "Restorative Tea"
+  description: "A compact flask of bitter tea that restores 10 HP."
+  icon: heart.png
+  type: consumable
+  stats: {hp: 10, attack: 0, defense: 0}
+  actions: [use, toss]
+  use:
+    actions:
+      - type: heal
+        amount: 10
+
+archivist_blade:
+  name: "Archivist's Blade"
+  description: "A well-balanced letter opener repurposed as a light weapon."
+  icon: heart.png
+  type: weapon
+  equipment_slot: weapon
+  stats: {hp: 0, attack: 2, defense: 0}
+  actions: [equip, toss]
+
+archivist_cloak:
+  name: "Archivist's Cloak"
+  description: "A padded travel cloak with a concealed document pocket."
+  icon: heart.png
+  type: armor
+  equipment_slot: armor
+  stats: {hp: 0, attack: 0, defense: 1}
+  actions: [equip, toss]

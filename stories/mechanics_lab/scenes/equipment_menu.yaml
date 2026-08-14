@@ -1,0 +1,18 @@
+id: equipment_menu
+text: "EQUIPMENT TEST MENU\nChoose a weapon to equip."
+choices:
+  - text: "Developer Wand (+2 attack)"
+    goto: equipment_menu
+    actions: [{equip_item: {weapon: dev_wand}}, {play_sfx: got_item.wav}]
+  - text: "Iron Hammer (+3 attack)"
+    goto: equipment_menu
+    actions: [{equip_item: {weapon: iron_hammer}}, {play_sfx: got_item.wav}]
+  - text: "Hunter Bow (+2 attack)"
+    goto: equipment_menu
+    actions: [{equip_item: {weapon: hunter_bow}}, {play_sfx: got_item.wav}]
+  - text: "Focus Staff (+1 attack)"
+    goto: equipment_menu
+    actions: [{equip_item: {weapon: focus_staff}}, {play_sfx: got_item.wav}]
+  - text: "Martial Wraps (+1 attack)"
+    goto: equipment_menu
+    actions: [{equip_item: {weapon: martial_wraps}}, {play_sfx: got_item.wav}]

@@ -1,0 +1,9 @@
+id: deer_lose
+background: deer.png
+ending: true
+ending_id: defeated_by_deer
+text: |
+  The buck proves too much for you. You never do find out what waits
+  deeper in the Whispering Woods.
+
+  *** THE WHISPERING WOODS -- ENDING: Defeated ***
