@@ -60,21 +60,34 @@ class GameEngine:
         self.manifest = self.assets.load_manifest()
         self.audio_preferences = self.assets.load_audio_config()
         self.player_profile = self.assets.load_player()
+        # Keep one canonical, headless project snapshot with the game
+        # session.  Runtime consumers that still require raw YAML-shaped
+        # dictionaries receive isolated copies through this shared view.
+        self.story_project = self.assets.load_project()
+        # Core diagnostics are deliberately advisory at this compatibility
+        # boundary.  Existing loader validation and runtime error timing stay
+        # authoritative; no Core diagnostic is promoted to a startup failure.
+        self.story_project_diagnostics = self.story_project.validate()
+        self.story_view = self.story_project.legacy_view()
+        self.items = self.story_view.load_items()
         # Validate only the opt-in exploration vocabulary before pygame opens;
         # legacy stories retain their existing permissive scene/item loading.
-        self.assets.validate_exploration_content()
-        self.items = self.assets.load_items()
+        self.assets.validate_exploration_content(item_registry=self.items)
         self.inventory = InventoryService(self.items)
         self.inventory_layout = InventoryLayout.from_profile(self.player_profile)
         self.inventory_grid = InventoryGrid(self.inventory_layout)
-        self.combat_move_config = self.assets.load_combat_move_config()
+        self.combat_move_config = self._load_combat_move_config()
         self.moves = self.combat_move_config["moves"]
         self.story_id = self.manifest.get("id", self.story_dir.name)
         self.story_version = str(self.manifest.get("version", "0.0"))
         self.save_slot, self.save_dir = save_slot, self.story_dir / "saves"
         self.state = GameState.new_from_manifest(self.manifest, self.player_profile)
         self._initialize_move_skill_defaults()
-        self.interpreter = StoryInterpreter(self.assets, self.state)
+        self.interpreter = StoryInterpreter(
+            self.assets,
+            self.state,
+            project_view=self.story_view,
+        )
         self.renderer = Renderer(self.assets, parse_display_config(self.manifest), self.manifest.get("render", {}))
         self.audio = AudioSystem(
             self.assets,
@@ -171,7 +184,15 @@ class GameEngine:
         self.game_over = None
         self._game_over_text = "Game over"
         self._reset_exploration_state()
-        self.scene, entry_sfx = self.interpreter.enter_scene(scene_id)
+        if hasattr(self, "story_view"):
+            scene_definition = self._load_scene_definition(scene_id)
+            self.scene, entry_sfx = self.interpreter.enter_scene(scene_id, scene=scene_definition)
+        else:
+            # Preserve the lightweight __new__-constructed engine doubles used
+            # by headless tests and older embedding callers.  A normally
+            # initialized GameEngine always has story_view and takes the
+            # canonical project-backed path above.
+            self.scene, entry_sfx = self.interpreter.enter_scene(scene_id)
         if self.scene.get("checkpoint") is True:
             self._save_checkpoint()
         default_background = self.manifest.get("default_scene_background")
@@ -206,7 +227,55 @@ class GameEngine:
             self.state.ending_reached = self.scene.get("ending_id", scene_id)
         self._render()
 
+    def _load_scene_definition(self, scene_id: str) -> dict[str, Any]:
+        """Return one isolated legacy scene mapping from the canonical project."""
+        return self.story_view.load_scene(scene_id)
+
+    def _load_combat_move_config(self) -> dict[str, Any]:
+        """Return the shared runtime move envelope from the canonical project.
+
+        Fully initialized gameplay always has ``story_view`` and therefore
+        receives a fresh compatibility mapping from the one StoryProject
+        owned by this engine.  The AssetLoader branch is intentionally narrow:
+        older ``__new__``-constructed engine doubles may not initialize the
+        project boundary at all.
+        """
+        if hasattr(self, "story_view"):
+            return self.story_view.load_combat_move_config()
+        return self.assets.load_combat_move_config()
+
+    def _load_event_pool_definition(self, event_pool_id: str) -> dict[str, Any]:
+        """Return one isolated legacy event-pool mapping from the project.
+
+        A normally initialized engine always has ``story_view``.  The
+        AssetLoader fallback keeps lightweight ``__new__``-constructed engine
+        doubles and older embedding callers compatible without making that
+        legacy path an authority for normal gameplay.
+        """
+        if hasattr(self, "story_view"):
+            return self.story_view.load_event_pool(event_pool_id)
+        return self.assets.load_event_pool(event_pool_id)
+
+    def _load_battle_definition(self, battle_id: str) -> dict[str, Any]:
+        """Return one isolated legacy battle mapping from the project.
+
+        A normally initialized engine always has ``story_view``.  The
+        AssetLoader fallback keeps lightweight ``__new__``-constructed engine
+        doubles and older embedding callers compatible without making that
+        legacy path an authority for normal gameplay.
+        """
+        if hasattr(self, "story_view"):
+            return self.story_view.load_battle(battle_id)
+        return self.assets.load_battle(battle_id)
+
     def _render(self) -> None:
+        """Pass the active isolated scene mapping to the presentation layer.
+
+        ``self.scene`` is the mapping loaded at scene entry from ``story_view``
+        and shared with the interpreter.  Renderer asset helpers may still
+        resolve/load binary or text assets, but they do not look up authored
+        scenes independently.
+        """
         assert self.scene is not None
         if self.battle:
             self.renderer.render_battle(self.battle)
@@ -943,18 +1012,18 @@ class GameEngine:
             self._start_battle(transition)
 
     def _start_battle(self, transition: Transition) -> None:
-        data = self.assets.load_battle(transition.battle_id or "")
+        data = self._load_battle_definition(transition.battle_id or "")
         def defense_sprite_exists(filename: str) -> bool:
             try:
                 self.assets.resolve_asset_path("sprites", filename)
                 return True
             except AssetNotFoundError:
                 return False
-        config = load_battle_config(data, self.assets.load_items(), f"battles/{transition.battle_id}.yaml",
+        config = load_battle_config(data, self.items, f"battles/{transition.battle_id}.yaml",
                                     self.combat_move_config, sprite_exists=defense_sprite_exists)
         if data.get("music"):
             self.audio.play_music(data["music"])
-        self.battle = BattleController(config, self.state, self.assets.load_items())
+        self.battle = BattleController(config, self.state, self.items)
         sequence = transition.test_sequence
         if sequence and sequence.get("replay"):
             sequence = dict(self._battle_test_sequence or {})
@@ -1011,7 +1080,7 @@ class GameEngine:
 
     def _run_random_event(self, event_pool_id: str) -> bool:
         """Enter the selected event scene; return False when chance misses."""
-        event_scene_id = maybe_trigger(self.assets.load_event_pool(event_pool_id))
+        event_scene_id = maybe_trigger(self._load_event_pool_definition(event_pool_id))
         if event_scene_id is None:
             return False
         self._enter_scene(event_scene_id)

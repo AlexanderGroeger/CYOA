@@ -1501,8 +1501,10 @@ class Renderer:
     def render_exploration(self, scene: dict[str, Any], view: dict[str, Any]) -> None:
         """Draw an opt-in exploration scene on the normal logical surface.
 
-        ``view`` is a deliberately simple render model built by GameEngine,
-        keeping pygame objects out of the exploration and inventory rules.
+        ``scene`` is the current isolated legacy scene mapping supplied by
+        GameEngine; it is not looked up by scene id here.  ``view`` is a
+        deliberately simple runtime render model built by GameEngine, keeping
+        pygame objects out of the exploration and inventory rules.
         """
         pg = self.pygame
         self.surface.fill((12, 12, 28))
@@ -1552,7 +1554,13 @@ class Renderer:
         self._present()
 
     def render(self, scene: dict[str, Any], choices: list[dict[str, Any]], selected: int, message: str | None = None, battle_lines: list[str] | None = None, text_page: str | None = None, show_options: bool = True) -> None:
-        """Draw all game UI to the logical surface, then nearest-scale once."""
+        """Draw the supplied scene mapping to the logical surface.
+
+        GameEngine supplies the isolated mapping produced by its canonical
+        StoryProject-backed scene-entry path.  Asset loading below is limited
+        to the referenced runtime assets; this method does not establish a
+        second authored scene-definition source.
+        """
         pg = self.pygame
         self.surface.fill((12, 12, 28))
         w, h = self.config.width, self.config.height

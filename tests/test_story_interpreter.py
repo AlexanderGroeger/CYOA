@@ -94,3 +94,34 @@ def test_unknown_action_type_rejected(interp):
 def test_choice_with_no_transition_rejected(interp):
     with pytest.raises(StoryValidationError):
         interp.resolve_choice({"text": "broken"})
+
+
+def test_project_view_supplies_scene_lookup_without_reloading_or_exposing_core_data(tmp_path, monkeypatch):
+    story_dir = tmp_path / "story"
+    (story_dir / "scenes").mkdir(parents=True)
+    (story_dir / "story.yaml").write_text(yaml.dump({"start_scene": "intro"}))
+    (story_dir / "scenes" / "intro.yaml").write_text(
+        yaml.dump({
+            "id": "intro",
+            "text": "From StoryProject",
+            "choices": [{"text": "Continue", "goto": "intro"}],
+        })
+    )
+
+    loader = AssetLoader(str(story_dir), "shared_assets")
+    project = loader.load_project()
+    project_view = project.legacy_view()
+    monkeypatch.setattr(loader, "load_project", lambda: pytest.fail("interpreter must not load a project"))
+    monkeypatch.setattr(loader, "load_scene", lambda _scene_id: pytest.fail("interpreter must use project view"))
+
+    interpreter = StoryInterpreter(
+        loader,
+        GameState(current_scene="intro"),
+        project_view=project_view,
+    )
+    scene, _ = interpreter.enter_scene()
+
+    assert scene["text"] == "From StoryProject"
+    scene["choices"][0]["text"] = "Runtime mutation"
+    assert project.scene("intro").to_mapping()["choices"][0]["text"] == "Continue"
+    assert project_view.load_scene("intro")["choices"][0]["text"] == "Continue"

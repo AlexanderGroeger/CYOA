@@ -12,6 +12,7 @@ from engine.battle.config import load_battle_config
 from engine.battle.controller import BattleController
 from engine.errors import BattleConfigError
 from engine.render.display import parse_display_config
+from engine.story_core import load_story_project
 
 
 DEMO_STORY = Path(__file__).resolve().parent.parent / "stories" / "demo_story"
@@ -48,6 +49,27 @@ def test_demo_battles_load_as_modern_and_legacy_configurations():
     assert legacy.legacy is True
 
 
+def test_project_battle_view_preserves_modern_and_legacy_config_parity():
+    assets = AssetLoader(str(DEMO_STORY), "shared_assets")
+    view = load_story_project(DEMO_STORY, "shared_assets").legacy_view()
+
+    for battle_id in ("wolf_fight", "deer_fight"):
+        legacy_data = assets.load_battle(battle_id)
+        project_data = view.load_battle(battle_id)
+        assert project_data == legacy_data
+        assert load_battle_config(
+            project_data,
+            view.load_items(),
+            f"{battle_id}.yaml",
+            view.load_combat_move_config(),
+        ) == load_battle_config(
+            legacy_data,
+            assets.load_items(),
+            f"{battle_id}.yaml",
+            assets.load_combat_move_config(),
+        )
+
+
 def test_demo_player_moves_require_both_learning_and_weapon_permission():
     assets = AssetLoader(str(DEMO_STORY), "shared_assets")
     state = GameState.new_from_manifest(assets.load_manifest(), assets.load_player())
@@ -62,6 +84,23 @@ def test_demo_player_moves_require_both_learning_and_weapon_permission():
     assert battle.available_player_moves() == []  # The player has not learned Hunter Shot.
     state.learn_move("hunter_shot")
     assert battle.available_player_moves() == ["hunter_shot"]
+
+
+def test_project_backed_global_moves_preserve_item_grant_availability():
+    project = load_story_project(DEMO_STORY, "shared_assets")
+    view = project.legacy_view()
+    state = GameState.new_from_manifest(project.manifest.to_mapping(), view.load_player())
+    config = load_battle_config(
+        view.load_battle("wolf_fight"), view.load_items(), "wolf_fight.yaml", view.load_combat_move_config(),
+    )
+    battle = BattleController(config, state, view.load_items())
+    weapon = state.get_equipped("weapon")
+    expected = [
+        move_id for move_id in state.known_moves
+        if move_id in view.load_items()[weapon]["combat"]["move_grants"]
+    ]
+
+    assert battle.available_player_moves() == expected
 
 
 def test_global_move_loading_rejects_encounter_owned_player_moves():

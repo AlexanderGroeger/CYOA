@@ -19,6 +19,7 @@ from engine.core.asset_loader import AssetLoader
 from engine.core.condition_eval import evaluate_condition
 from engine.core.game_state import GameState
 from engine.errors import StoryValidationError
+from engine.story_core.compat.legacy_views import LegacyProjectView
 
 
 @dataclass
@@ -36,16 +37,37 @@ class Transition:
 
 
 class StoryInterpreter:
-    def __init__(self, assets: AssetLoader, state: GameState):
+    def __init__(
+        self,
+        assets: AssetLoader,
+        state: GameState,
+        *,
+        project_view: LegacyProjectView | None = None,
+    ):
         self.assets = assets
         self.state = state
+        # The game session supplies a view over its already-loaded
+        # StoryProject.  Keeping the optional legacy fallback preserves the
+        # small standalone interpreter API used by headless callers while
+        # avoiding a second project load here.
+        self.project_view = project_view
+
+    def _load_scene(self, scene_id: str) -> dict[str, Any]:
+        if self.project_view is not None:
+            return self.project_view.load_scene(scene_id)
+        return self.assets.load_scene(scene_id)
 
     # -- scene entry -----------------------------------------------------
-    def enter_scene(self, scene_id: str | None = None) -> tuple[dict[str, Any], list[str]]:
+    def enter_scene(
+        self,
+        scene_id: str | None = None,
+        *,
+        scene: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], list[str]]:
         """Loads a scene, records it as current, runs its entry actions.
         Returns (scene_data, sfx_requested_by_entry_actions)."""
         scene_id = scene_id or self.state.current_scene
-        scene = self.assets.load_scene(scene_id)
+        scene = scene if scene is not None else self._load_scene(scene_id)
         self.state.enter_scene(scene_id)
         sfx = self.run_actions(scene.get("actions", []))
         return scene, sfx

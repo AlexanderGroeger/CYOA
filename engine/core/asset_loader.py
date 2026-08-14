@@ -18,6 +18,7 @@ This module never interprets what it loads -- it doesn't know what a
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -160,12 +161,16 @@ class AssetLoader:
             raise StoryValidationError(f"Scene id {scene_id!r} is ambiguous; matching files: {joined}")
         return set(by_id)
 
-    def validate_exploration_content(self) -> None:
+    def validate_exploration_content(self, item_registry: Mapping[str, Any] | None = None) -> None:
         """Validate opt-in exploration YAML and referenced assets up front.
 
         Legacy scenes/items keep their permissive loading behavior.  New
         exploration content is intentionally checked as a unit, so authors
         receive the scene, field, and bad reference before starting pygame.
+
+        ``item_registry`` is an optional compatibility seam for callers that
+        already own a canonical-project-backed legacy item mapping.  Omitting
+        it preserves the established AssetLoader behavior.
         """
         from engine.core.exploration import (
             exploration_config,
@@ -174,7 +179,7 @@ class AssetLoader:
         )
         from engine.core.inventory import InventoryService, InventorySchemaError
 
-        raw_items = self.load_items()
+        raw_items = self.load_items() if item_registry is None else item_registry
         try:
             inventory = InventoryService(raw_items)
         except InventorySchemaError as error:

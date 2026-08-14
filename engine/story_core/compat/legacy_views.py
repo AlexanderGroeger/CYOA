@@ -16,9 +16,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from engine.errors import AssetNotFoundError
+from engine.errors import AssetNotFoundError, StoryValidationError
 
 if TYPE_CHECKING:  # Avoid a runtime import cycle while project.py is loading.
     from engine.story_core.project import StoryProject
@@ -209,12 +210,29 @@ class LegacyProjectView:
         return [_mapping_copy(entry) for entry in self._definitions(entries)]
 
     def _load_definition(self, label: str, identifier: str, *collection_names: str) -> dict[str, Any]:
+        if label == "scene":
+            # Preserve AssetLoader's scene-ID contract at the compatibility
+            # boundary.  Story/Core indexes by authored filename stem, while
+            # callers still provide bare scene IDs.
+            if Path(identifier).name != identifier or not identifier:
+                raise StoryValidationError(f"Scene id must be a bare filename, got {identifier!r}")
         definition = self._definition(identifier, *collection_names)
         if definition is _MISSING:
             # Keep the same exception family as AssetLoader's direct YAML
             # lookup without pretending this view owns file paths/caching.
             suffix = "" if label == "animation" else ".yaml"
             raise AssetNotFoundError(f"No {label} definition named '{identifier}{suffix}' found in StoryProject")
+        if label == "scene":
+            declared_id = getattr(definition, "declared_id", _MISSING)
+            if declared_id is _MISSING:
+                authored = definition if isinstance(definition, Mapping) else None
+                declared_id = authored.get("id") if authored is not None else None
+            if declared_id and declared_id != identifier:
+                source = getattr(definition, "source", None)
+                relative = str(source) if source is not None else f"scenes/{identifier}.yaml"
+                raise AssetNotFoundError(
+                    f"{relative} declares id '{declared_id}', which doesn't match its filename"
+                )
         return _mapping_copy(definition)
 
     def _definition(self, identifier: str, *collection_names: str) -> Any:
