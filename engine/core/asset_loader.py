@@ -21,9 +21,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from engine.errors import AssetNotFoundError, StoryValidationError
+from engine.story_core.source import StorySource, StorySourceError
 
 # Extensions routed through the pygame image pipeline rather than loaded as
 # plain text art. Kept here because AssetLoader resolves the original path.
@@ -36,20 +35,22 @@ class AssetLoader:
         self.shared_dir = Path(shared_dir)
         self._cache: dict[str, Any] = {}
         self._scene_paths: dict[str, Path] = {}
+        # The shared source owns YAML/path mechanics.  It receives the exact
+        # legacy cache so every existing load_* API keeps returning the same
+        # mutable cached object as before.
+        self._source = StorySource(self.story_dir, self.shared_dir, cache=self._cache)
+        # Story/Core is intentionally opt-in for now.  Keeping its project
+        # object separate and lazy means all established loader methods keep
+        # their current mutable-cache and exception behavior.
+        self._project: Any | None = None
 
     # -- low-level path resolution ------------------------------------------
     def resolve_asset_path(self, category: str, filename: str) -> Path:
         """category is one of: backgrounds, sprites, animations, music, sfx."""
-        story_path = self.story_dir / "assets" / category / filename
-        if story_path.exists():
-            return story_path
-        shared_path = self.shared_dir / category / filename
-        if shared_path.exists():
-            return shared_path
-        raise AssetNotFoundError(
-            f"Asset '{filename}' not found in either "
-            f"'{story_path}' or '{shared_path}'"
-        )
+        try:
+            return self._source.resolve_asset_path(category, filename)
+        except StorySourceError as error:
+            raise AssetNotFoundError(str(error)) from None
 
     def resolve_asset_reference(self, filename: str, default_category: str) -> Path:
         """Resolve either a conventional asset filename or a story-relative path.
@@ -64,33 +65,20 @@ class AssetLoader:
         Absolute paths are intentionally not accepted: authored content must
         remain portable with its story directory or the shared asset bundle.
         """
-        if not isinstance(filename, str) or not filename.strip():
-            raise AssetNotFoundError(f"Asset reference must be a non-empty string, got {filename!r}")
-        candidate = Path(filename.replace("\\", "/"))
-        if candidate.is_absolute():
-            raise AssetNotFoundError(f"Absolute asset paths are not supported: {filename!r}")
-        normalized = Path(str(candidate).lstrip("./"))
-        for root in (self.story_dir, self.shared_dir):
-            direct = root / normalized
-            if direct.exists():
-                return direct
-        return self.resolve_asset_path(default_category, str(normalized))
+        try:
+            return self._source.resolve_asset_reference(filename, default_category)
+        except StorySourceError as error:
+            raise AssetNotFoundError(str(error)) from None
 
     def is_image_asset(self, filename: str) -> bool:
         return Path(filename).suffix.lower() in IMAGE_EXTENSIONS
 
     # -- YAML (story-relative, not asset-category-relative) ------------------
     def load_yaml(self, relative_path: str) -> Any:
-        path = self.story_dir / relative_path
-        cache_key = str(path)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-        if not path.exists():
-            raise AssetNotFoundError(f"Story file not found: {path}")
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-        self._cache[cache_key] = data
-        return data
+        try:
+            return self._source.load_yaml_legacy(relative_path)
+        except FileNotFoundError:
+            raise AssetNotFoundError(f"Story file not found: {self.story_dir / relative_path}") from None
 
     # -- text/binary assets ---------------------------------------------------
     def load_text_asset(self, category: str, filename: str) -> str:
@@ -318,13 +306,7 @@ class AssetLoader:
             return self.load_yaml(os.path.join("assets", "animations", animation_name, "anim.yaml"))
         shared_path = self.shared_dir / "animations" / animation_name / "anim.yaml"
         if shared_path.exists():
-            cache_key = str(shared_path)
-            if cache_key in self._cache:
-                return self._cache[cache_key]
-            with open(shared_path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            self._cache[cache_key] = data
-            return data
+            return self._source.load_yaml_path_legacy(shared_path)
         raise AssetNotFoundError(
             f"Animation '{animation_name}' not found in either "
             f"'{story_path}' or '{shared_path}'"
@@ -337,3 +319,27 @@ class AssetLoader:
         if (story_path / "anim.yaml").exists():
             return story_path
         return self.shared_dir / "animations" / animation_name
+
+    def load_project(self) -> Any:
+        """Lazily load the headless Story/Core project for this story.
+
+        This is an additive migration seam only: existing ``load_*`` methods
+        continue to read and return their current cached mutable YAML objects.
+        It uses the same source/path implementation with an independent cache,
+        so runtime mutations of legacy cached mappings cannot become authored
+        Story/Core definitions.  Existing loader object identity and error
+        behavior remain unchanged.
+        """
+        if self._project is None:
+            # Imports are local to keep current runtime startup independent of
+            # the new core until a caller explicitly asks for this bridge.
+            from engine.story_core.project import load_story_project
+            from engine.story_core.source import StorySource
+
+            # ``self._source`` intentionally shares ``self._cache`` with the
+            # old mutable API.  A project needs its own source/cache before it
+            # freezes definitions so legacy caller mutations cannot leak into
+            # a designer/editor snapshot.
+            project_source = StorySource(self.story_dir, self.shared_dir)
+            self._project = load_story_project(self.story_dir, self.shared_dir, source=project_source)
+        return self._project

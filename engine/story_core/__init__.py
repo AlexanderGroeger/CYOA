@@ -1,0 +1,145 @@
+"""Pure-Python shared Story/Core foundation.
+
+This package loads and validates static story definitions for both the current
+pygame runtime bridge and future headless/editor consumers.  It deliberately
+does not initialize or import pygame, PySide6, rendering, mixer, or active
+gameplay controllers.
+"""
+
+from .actions import (
+    ActionError,
+    ActionForm,
+    ActionReferences,
+    ActionScope,
+    StoryAction,
+    action_references,
+    actions_references,
+    parse_action,
+    parse_actions,
+)
+from .compat import (
+    LegacyProjectView,
+    SaveCompatibilityAdapter,
+    SaveReferenceValidator,
+    validate_save_references,
+    validate_v1_save_references,
+)
+from .conditions import (
+    ConditionDialect,
+    ConditionError,
+    ConditionSymbols,
+    StoryCondition,
+    evaluate_condition,
+    evaluate_legacy_condition,
+    evaluate_structured_condition,
+    parse_condition,
+    validate_legacy_condition,
+    validate_structured_condition,
+)
+from .diagnostics import (
+    Diagnostic,
+    DiagnosticBag,
+    Diagnostics,
+    DiagnosticSeverity,
+    StoryCoreError,
+)
+from .index import (
+    AnimationReference,
+    BattleReference,
+    ContentKind,
+    ContentType,
+    EventPoolReference,
+    ItemReference,
+    MoveReference,
+    ProjectIndex,
+    Reference,
+    SceneReference,
+)
+from .models import (
+    AnimationDefinition,
+    BattleDefinition,
+    EventPoolDefinition,
+    ItemDefinition,
+    MoveDefinition,
+    PlayerProfile,
+    SceneDefinition,
+    StoryManifest,
+)
+from .project import ProjectSymbols, StoryProject, StoryProjectLoadError, load_story_project
+from .schema import FieldSpec, Schema, SchemaRegistry, TypeSpec, default_schema_registry
+from .serialization import (
+    dump_project_yaml,
+    semantic_equivalent,
+    serialize_definition,
+    serialize_project,
+    write_serialized_project,
+)
+from .source import SourceDocument, StorySource, StorySourceError
+
+
+__all__ = [
+    "ActionError",
+    "ActionForm",
+    "ActionReferences",
+    "ActionScope",
+    "AnimationDefinition",
+    "AnimationReference",
+    "BattleDefinition",
+    "BattleReference",
+    "ConditionDialect",
+    "ConditionError",
+    "ConditionSymbols",
+    "ContentKind",
+    "ContentType",
+    "Diagnostic",
+    "DiagnosticBag",
+    "Diagnostics",
+    "DiagnosticSeverity",
+    "dump_project_yaml",
+    "EventPoolDefinition",
+    "EventPoolReference",
+    "evaluate_condition",
+    "evaluate_legacy_condition",
+    "evaluate_structured_condition",
+    "FieldSpec",
+    "ItemDefinition",
+    "ItemReference",
+    "LegacyProjectView",
+    "load_story_project",
+    "MoveDefinition",
+    "MoveReference",
+    "parse_action",
+    "parse_actions",
+    "parse_condition",
+    "PlayerProfile",
+    "ProjectIndex",
+    "ProjectSymbols",
+    "Reference",
+    "SaveCompatibilityAdapter",
+    "SaveReferenceValidator",
+    "SceneDefinition",
+    "SceneReference",
+    "Schema",
+    "SchemaRegistry",
+    "semantic_equivalent",
+    "serialize_definition",
+    "serialize_project",
+    "SourceDocument",
+    "StoryAction",
+    "StoryCondition",
+    "StoryCoreError",
+    "StoryManifest",
+    "StoryProject",
+    "StoryProjectLoadError",
+    "StorySource",
+    "StorySourceError",
+    "TypeSpec",
+    "validate_legacy_condition",
+    "validate_save_references",
+    "validate_structured_condition",
+    "validate_v1_save_references",
+    "write_serialized_project",
+    "default_schema_registry",
+    "action_references",
+    "actions_references",
+]

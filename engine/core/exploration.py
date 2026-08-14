@@ -13,9 +13,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from engine.core.condition_eval import evaluate_condition
 from engine.core.game_state import GameState
 from engine.errors import ConditionError, StoryValidationError
+from engine.story_core.conditions import (
+    ConditionError as StoryCoreConditionError,
+    evaluate_structured_condition as _evaluate_structured_condition,
+    validate_structured_condition as _validate_structured_condition,
+)
 
 
 INTERACTION_TYPES = frozenset({"inspect", "action"})
@@ -311,105 +315,24 @@ def exploration_config(scene: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def evaluate_conditions(raw: Any, state: GameState) -> bool:
-    """Evaluate legacy condition strings and structured exploration mappings."""
-    if raw is None or raw == {}:
-        return True
-    if isinstance(raw, str):
-        return evaluate_condition(raw, state)
-    if isinstance(raw, (list, tuple)):
-        return all(evaluate_conditions(item, state) for item in raw)
-    if not isinstance(raw, Mapping):
-        raise ConditionError(f"Exploration conditions must be a mapping or string, got {raw!r}")
-    if "condition" in raw:
-        condition = raw["condition"]
-        if not isinstance(condition, str):
-            raise ConditionError("Exploration condition must be a string")
-        if not evaluate_condition(condition, state):
-            return False
-    if "all" in raw:
-        entries = raw["all"]
-        if not isinstance(entries, (list, tuple)):
-            raise ConditionError("Exploration conditions.all must be a list")
-        if not all(evaluate_conditions(entry, state) for entry in entries):
-            return False
-    if "any" in raw:
-        entries = raw["any"]
-        if not isinstance(entries, (list, tuple)):
-            raise ConditionError("Exploration conditions.any must be a list")
-        if not any(evaluate_conditions(entry, state) for entry in entries):
-            return False
-    if "not" in raw and evaluate_conditions(raw["not"], state):
-        return False
-    leaf_keys = {"flag", "variable", "var", "has_item"}
-    if leaf_keys & set(raw):
-        return _evaluate_condition_leaf(raw, state)
-    known = {"condition", "all", "any", "not"} | leaf_keys | {"equals", "not_equals", "quantity", "exists"}
-    unknown = set(raw) - known
-    if unknown:
-        raise ConditionError(f"Unknown exploration condition field(s): {', '.join(sorted(unknown))}")
-    return True
+    """Evaluate both established condition dialects through Story/Core.
 
-
-def _evaluate_condition_leaf(raw: Mapping[str, Any], state: GameState) -> bool:
-    active = [key for key in ("flag", "variable", "var", "has_item") if key in raw]
-    if len(active) != 1:
-        raise ConditionError("An exploration condition leaf requires exactly one of flag, variable, or has_item")
-    kind = active[0]
-    name = raw[kind]
-    if not isinstance(name, str) or not name:
-        raise ConditionError(f"Exploration condition {kind} must be a non-empty string")
-    if kind == "flag":
-        value: Any = state.get_flag(name)
-    elif kind in {"variable", "var"}:
-        value = state.get_var(name)
-    else:
-        quantity = raw.get("quantity", 1)
-        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1:
-            raise ConditionError("Exploration has_item quantity must be a positive integer")
-        value = state.has_item(name, quantity)
-    if "equals" in raw:
-        return value == raw["equals"]
-    if "not_equals" in raw:
-        return value != raw["not_equals"]
-    if "exists" in raw:
-        return bool(value) is bool(raw["exists"])
-    return bool(value)
+    The engine-facing exception class remains unchanged, while Story/Core is
+    now the shared parser/evaluator used by headless tooling and runtime
+    exploration alike.
+    """
+    try:
+        return _evaluate_structured_condition(raw, state)
+    except StoryCoreConditionError as exc:
+        raise ConditionError(str(exc)) from None
 
 
 def validate_conditions(raw: Any, context: str = "conditions") -> None:
-    """Validate structured condition shape without needing a live profile."""
-    if raw is None or raw == {} or isinstance(raw, str):
-        return
-    if isinstance(raw, (list, tuple)):
-        for index, entry in enumerate(raw):
-            validate_conditions(entry, f"{context}[{index}]")
-        return
-    if not isinstance(raw, Mapping):
-        raise StoryValidationError(f"{context} must be a mapping or condition string")
-    for key in ("all", "any"):
-        if key in raw:
-            entries = raw[key]
-            if not isinstance(entries, (list, tuple)):
-                raise StoryValidationError(f"{context}.{key} must be a list")
-            for index, entry in enumerate(entries):
-                validate_conditions(entry, f"{context}.{key}[{index}]")
-    if "not" in raw:
-        validate_conditions(raw["not"], f"{context}.not")
-    if "condition" in raw and not isinstance(raw["condition"], str):
-        raise StoryValidationError(f"{context}.condition must be a string")
-    leaves = [key for key in ("flag", "variable", "var", "has_item") if key in raw]
-    if len(leaves) > 1:
-        raise StoryValidationError(f"{context} has more than one condition subject")
-    if leaves:
-        name = raw[leaves[0]]
-        if not isinstance(name, str) or not name:
-            raise StoryValidationError(f"{context}.{leaves[0]} must be a non-empty string")
-    if "quantity" in raw and (isinstance(raw["quantity"], bool) or not isinstance(raw["quantity"], int) or raw["quantity"] < 1):
-        raise StoryValidationError(f"{context}.quantity must be a positive integer")
-    known = {"condition", "all", "any", "not", "flag", "variable", "var", "has_item", "equals", "not_equals", "quantity", "exists"}
-    unknown = set(raw) - known
-    if unknown:
-        raise StoryValidationError(f"{context} has unknown field(s): {', '.join(sorted(unknown))}")
+    """Validate structured condition shape through the shared Story/Core."""
+    try:
+        _validate_structured_condition(raw, context)
+    except StoryCoreConditionError as exc:
+        raise StoryValidationError(str(exc)) from None
 
 
 def resolve_dialogue(scene: Mapping[str, Any], state: GameState, reference: Any | None = None) -> DialogueSequence | None:
