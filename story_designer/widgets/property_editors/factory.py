@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from ...models import PropertyDescriptor
 from engine.story_core.schema import MISSING
+from ..condition_editor import ConditionEditorWidget
 
 
 def display_value(value: Any) -> str:
@@ -192,6 +193,7 @@ class PropertyEditorFactory:
         descriptor: PropertyDescriptor,
         *,
         story_root: Path | None = None,
+        project: Any | None = None,
         parent: QWidget | None = None,
     ) -> QWidget:
         type_spec = descriptor.type_spec
@@ -223,6 +225,8 @@ class PropertyEditorFactory:
                 asset_kind=descriptor.asset_kind,
                 parent=parent,
             )
+        if kind == "condition":
+            return ConditionEditorWidget(project=project, parent=parent)
         return ReadOnlyEditor(
             descriptor.effective_value,
             "Read-only in generic Inspector; use a specialized editor for this type.",
@@ -277,11 +281,12 @@ def create_property_editor(
     descriptor: PropertyDescriptor,
     *,
     story_root: Path | None = None,
+    project: Any | None = None,
     parent: QWidget | None = None,
 ) -> QWidget:
     """Convenience function for callers that do not need a factory instance."""
 
-    return PropertyEditorFactory().create(descriptor, story_root=story_root, parent=parent)
+    return PropertyEditorFactory().create(descriptor, story_root=story_root, project=project, parent=parent)
 
 
 __all__ = [

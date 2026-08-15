@@ -33,7 +33,6 @@ from engine.story_core import (
     action_editor_specs,
     minimal_authored_action,
 )
-from engine.story_core.conditions import ConditionError, parse_condition
 from engine.story_core.schema import MISSING
 
 from ..models import (
@@ -59,6 +58,7 @@ from ..models import (
     SetDialogueTextCommand,
     present_dialogue_actions,
 )
+from .condition_editor import ConditionEditorWidget
 
 
 class _CommitPlainTextEdit(QPlainTextEdit):
@@ -136,26 +136,16 @@ class DialogueEditorWidget(QWidget):
         self.open_reference_button = QPushButton("Open Referenced Sequence")
         self.open_reference_button.clicked.connect(self._open_referenced_sequence)
 
-        self.condition_mode = QComboBox()
-        self.condition_mode.addItem("Always", "absent")
-        self.condition_mode.addItem("String expression", "string")
-        self.condition_mode.addItem("Structured condition (JSON)", "structured")
-        self.condition_mode.currentIndexChanged.connect(self._condition_mode_changed)
-        self.condition_text = QLineEdit()
-        self.condition_text.setPlaceholderText("flags.door_open")
-        self.condition_text.editingFinished.connect(self._string_condition_changed)
-        self.condition_json = QPlainTextEdit()
-        self.condition_json.setPlaceholderText('{"flag": "door_open"}')
-        self.condition_json.setMaximumHeight(100)
-        self.apply_condition_button = QPushButton("Apply Condition")
-        self.apply_condition_button.clicked.connect(self._structured_condition_changed)
+        self.condition_editor = ConditionEditorWidget(parent=self)
+        self.condition_mode = self.condition_editor.condition_mode
+        self.condition_text = self.condition_editor.condition_text
+        self.condition_json = self.condition_editor.condition_json
+        self.condition_status = self.condition_editor.condition_status
+        self.condition_editor.condition_changed.connect(self._condition_changed)
         self.once_check = QCheckBox("Play once")
         self.once_check.toggled.connect(self._once_changed)
         self.metadata_summary = QLabel()
         self.metadata_summary.setWordWrap(True)
-        self.condition_status = QLabel()
-        self.condition_status.setWordWrap(True)
-        self.condition_status.setStyleSheet("color: #b45309;")
 
         self.actions_list = QListWidget()
         self.actions_list.setMinimumHeight(90)
@@ -193,13 +183,9 @@ class DialogueEditorWidget(QWidget):
 
         metadata = QGroupBox("Entry metadata")
         metadata_form = QFormLayout(metadata)
-        metadata_form.addRow("Condition", self.condition_mode)
-        metadata_form.addRow(self.condition_text)
-        metadata_form.addRow(self.condition_json)
-        metadata_form.addRow(self.apply_condition_button)
+        metadata_form.addRow(self.condition_editor)
         metadata_form.addRow(self.once_check)
         metadata_form.addRow(self.metadata_summary)
-        metadata_form.addRow(self.condition_status)
 
         buttons = QHBoxLayout()
         for button in (self.add_button, self.remove_button, self.duplicate_button, self.move_up_button, self.move_down_button):
@@ -258,6 +244,7 @@ class DialogueEditorWidget(QWidget):
         previous_entry = self.selected_entry
         self.project = project
         self.scene_id = str(scene_id)
+        self.condition_editor.set_project(project)
         self.document = DialogueDocumentModel(self.scene_id, mapping)
         self._updating = True
         self.sources.clear()
@@ -536,36 +523,20 @@ class DialogueEditorWidget(QWidget):
             self._updating = False
             return
         condition = raw.get("conditions", raw.get("condition", MISSING))
-        if condition is MISSING:
-            mode = "absent"
-            self.condition_text.clear()
-            self.condition_json.clear()
-        elif isinstance(condition, str):
-            mode = "string"
-            self.condition_text.setText(condition)
-            self.condition_json.clear()
-        else:
-            mode = "structured"
-            self.condition_text.clear()
-            self.condition_json.setPlainText(json.dumps(condition, indent=2, sort_keys=True))
-        self.condition_mode.setCurrentIndex(max(0, self.condition_mode.findData(mode)))
+        self.condition_editor.set_condition(condition, project=self.project)
         self.once_check.setChecked(bool(raw.get("once", False)))
         actions = raw.get("actions")
         self.metadata_summary.setText(
             f"Actions preserved: {len(actions)}" if isinstance(actions, list) else "Unknown authored fields are preserved."
         )
         self._updating = False
-        self._show_condition_status(condition)
         self._populate_actions(raw.get("actions"), self._metadata_path + ("actions",) if self._metadata_path is not None else None)
         self._update_enabled_state()
 
     def _clear_metadata(self) -> None:
-        self.condition_text.clear()
-        self.condition_json.clear()
-        self.condition_mode.setCurrentIndex(0)
+        self.condition_editor.set_condition(MISSING, project=self.project)
         self.once_check.setChecked(False)
         self.metadata_summary.clear()
-        self.condition_status.clear()
 
     def _clear_action_editor(self) -> None:
         self.actions_list.clear()
@@ -779,23 +750,8 @@ class DialogueEditorWidget(QWidget):
         self._after_change(self.selected_entry)
         return True
 
-    def _condition_mode_changed(self, _index: int) -> None:
-        if self._updating or self._metadata_path is None:
-            return
-        if self.condition_mode.currentData() == "absent":
-            self._commit_condition(MISSING)
-
-    def _string_condition_changed(self) -> None:
-        if not self._updating and self.condition_mode.currentData() == "string":
-            self._commit_condition(self.condition_text.text())
-
-    def _structured_condition_changed(self) -> None:
-        if self._updating or self.condition_mode.currentData() != "structured":
-            return
-        try:
-            value = json.loads(self.condition_json.toPlainText())
-        except json.JSONDecodeError as exc:
-            self._show_error(f"Invalid JSON condition: {exc.msg}")
+    def _condition_changed(self, value: Any) -> None:
+        if self._updating:
             return
         self._commit_condition(value)
 
@@ -916,9 +872,7 @@ class DialogueEditorWidget(QWidget):
         self.move_down_button.setEnabled(can_structure and self.selected_entry is not None and source is not None and self.selected_entry.index < len(source.entries) - 1)
         has_metadata = self._metadata_path is not None
         self.condition_mode.setEnabled(has_metadata)
-        self.condition_text.setVisible(has_metadata and self.condition_mode.currentData() == "string")
-        self.condition_json.setVisible(has_metadata and self.condition_mode.currentData() == "structured")
-        self.apply_condition_button.setVisible(has_metadata and self.condition_mode.currentData() == "structured")
+        self.condition_editor.setEnabled(has_metadata)
         self.once_check.setEnabled(has_metadata)
         is_sequence = bool(source is not None and source.kind == "sequence")
         self.duplicate_sequence_button.setEnabled(is_sequence)
@@ -938,17 +892,6 @@ class DialogueEditorWidget(QWidget):
         reference = _entry_sequence_reference(entry.authored if entry else None)
         if reference is not None:
             self.open_dialogue_sequence.emit(reference)
-
-    def _show_condition_status(self, condition: Any) -> None:
-        if condition is MISSING:
-            self.condition_status.clear()
-            return
-        try:
-            parse_condition(condition)
-        except (ConditionError, TypeError, ValueError) as exc:
-            self.condition_status.setText(f"Condition warning: {exc}")
-        else:
-            self.condition_status.clear()
 
     def _show_error(self, message: str) -> None:
         self.condition_status.setText(str(message))

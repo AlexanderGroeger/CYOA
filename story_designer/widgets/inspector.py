@@ -32,8 +32,10 @@ from ..models import (
     PropertyDescriptor,
     RemovePropertyCommand,
     SetPropertyCommand,
+    SetSceneElementConditionCommand,
 )
 from .property_editors import AssetPathEditor, PropertyEditorFactory
+from .condition_editor import ConditionEditorWidget
 
 
 @dataclass
@@ -97,6 +99,13 @@ class InspectorWidget(QWidget):
         self.scene_geometry_form = QFormLayout(self.scene_geometry_box)
         self.fields_layout.addWidget(self.scene_geometry_box)
         self.scene_geometry_box.hide()
+        self.scene_condition_box = QGroupBox("Condition")
+        scene_condition_layout = QVBoxLayout(self.scene_condition_box)
+        self.scene_condition_editor = ConditionEditorWidget(parent=self.scene_condition_box)
+        self.scene_condition_editor.condition_changed.connect(self._scene_condition_changed)
+        scene_condition_layout.addWidget(self.scene_condition_editor)
+        self.fields_layout.addWidget(self.scene_condition_box)
+        self.scene_condition_box.hide()
 
         self.property_scroll = QScrollArea()
         self.property_scroll.setWidgetResizable(True)
@@ -142,6 +151,7 @@ class InspectorWidget(QWidget):
         self.revert_button.setEnabled(False)
         self.property_scroll.setEnabled(True)
         self.scene_geometry_box.hide()
+        self.scene_condition_box.hide()
         self._scene_geometry_fields.clear()
         self._clear_form()
 
@@ -159,6 +169,7 @@ class InspectorWidget(QWidget):
         self._scene_element = None
         self.property_scroll.setEnabled(True)
         self.scene_geometry_box.hide()
+        self.scene_condition_box.hide()
         if project is None or selection is None or definition is None:
             self.clear()
             return
@@ -196,6 +207,37 @@ class InspectorWidget(QWidget):
         self.definition_value.setText("Authored scene element (read-only preview)")
         self.validation_value.setText("Conditional" if "visible_when" in authored or "conditions" in authored else "Authored")
         self.summary.setPlainText(_compact_mapping(authored))
+        if getattr(selection, "kind", "") in {"object", "look_region"}:
+            condition = authored.get("visible_when", authored.get("conditions", MISSING))
+            self.scene_condition_editor.set_condition(condition, project=self._project)
+            self.scene_condition_editor.setEnabled(True)
+            self.scene_condition_box.show()
+
+    def _scene_condition_changed(self, value: Any) -> None:
+        if self.session is None or self._selection is None or self._scene_element is None:
+            return
+        try:
+            self.session.apply_command(SetSceneElementConditionCommand(self._selection, self._scene_element, value))
+        except EditValidationError as exc:
+            self.scene_condition_editor.status.setText(exc.message)
+            return
+        self.summary.setPlainText(_compact_mapping(self._scene_element_mapping()))
+        self.validation_value.setText("Conditional" if value is not MISSING else "Authored")
+        self.state_changed.emit()
+
+    def _scene_element_mapping(self) -> Mapping[str, Any]:
+        if self.session is None or self._selection is None or self._scene_element is None:
+            return {}
+        mapping = self.session.working_mapping(self._selection) or {}
+        kind = getattr(self._scene_element, "kind", "")
+        key = "objects" if kind == "object" else "look_regions"
+        exploration = mapping.get("exploration")
+        collection = exploration.get(key) if isinstance(exploration, Mapping) and key in exploration else mapping.get(key)
+        if isinstance(collection, list):
+            for value in collection:
+                if isinstance(value, Mapping) and value.get("id") == getattr(self._scene_element, "id", None):
+                    return value
+        return {}
 
     def _build_scene_geometry(self, selection: object, authored: Mapping[str, Any]) -> None:
         while self.scene_geometry_form.rowCount():
@@ -242,6 +284,7 @@ class InspectorWidget(QWidget):
         self._scene_element = None
         self.property_scroll.setEnabled(True)
         self.scene_geometry_box.hide()
+        self.scene_condition_box.hide()
         self._scene_geometry_fields.clear()
         if self._project is None or self._selection is None or self._definition is None:
             self.clear()
@@ -321,6 +364,7 @@ class InspectorWidget(QWidget):
         editor = self.factory.create(
             descriptor,
             story_root=self._project.story_root if self._project is not None else None,
+            project=self._project,
         )
         if force_read_only:
             editor.setEnabled(False)
@@ -383,7 +427,7 @@ class InspectorWidget(QWidget):
         if descriptor is None:
             return
         type_kind = descriptor.type_spec.kind if descriptor.type_spec is not None else None
-        if (value is None or (value == "" and type_kind == "asset")) and not descriptor.required:
+        if (value is MISSING or value is None or (value == "" and type_kind == "asset")) and not descriptor.required:
             command: Any = RemovePropertyCommand(selection, path)
         else:
             command = SetPropertyCommand(selection, path, value)
@@ -465,6 +509,8 @@ class InspectorWidget(QWidget):
                 editor.setCurrentIndex(index if index >= 0 else -1)
             elif kind == "asset" and isinstance(editor, AssetPathEditor):
                 editor.setText("" if value is MISSING else str(value))
+            elif kind == "condition" and isinstance(editor, ConditionEditorWidget):
+                editor.set_condition(value, project=None)
         finally:
             if hasattr(editor, "set_initializing"):
                 editor.set_initializing(False)

@@ -452,8 +452,8 @@ def _validate_type(value: Any, type_spec: TypeSpec) -> ValidationResult:
             result = _validate_type(item, type_spec.value_type)
             if not result.valid:
                 return ValidationResult.error(f"Mapping entry {key!r}: {result.message}")
-    if kind == "condition" and not isinstance(value, (str, Mapping)):
-        return ValidationResult.error("Condition must be text or a mapping.")
+    if kind == "condition" and not isinstance(value, (str, Mapping, list, tuple)):
+        return ValidationResult.error("Condition must be text, a mapping, or a list.")
     if kind == "discriminated_union" and type_spec.discriminator:
         discriminator_value = value.get(type_spec.discriminator) if isinstance(value, Mapping) else None
         if discriminator_value is not None and type_spec.variants and str(discriminator_value) not in type_spec.variants:
@@ -1021,6 +1021,75 @@ class SetNavigationConditionCommand(EditCommand):
             target.pop("condition", None)
             return
         key = "conditions" if "conditions" in target else ("condition" if "condition" in target else "conditions")
+        target[key] = _copy(self.condition)
+
+
+def _scene_element_condition_location(
+    mapping: Mapping[str, Any],
+    element: Any,
+) -> tuple[PropertyPath, Mapping[str, Any]] | None:
+    """Locate an exploration object/look-region without normalizing aliases."""
+
+    kind = getattr(element, "kind", None)
+    identifier = getattr(element, "id", None)
+    if kind not in {"object", "look_region"}:
+        return None
+    key = "objects" if kind == "object" else "look_regions"
+    # Match the same root-vs-exploration precedence used by presentation and
+    # geometry editing.
+    exploration = mapping.get("exploration")
+    if isinstance(exploration, Mapping) and key in exploration:
+        collection_path: PropertyPath = ("exploration", key)
+    elif key in mapping:
+        collection_path = (key,)
+    else:
+        return None
+    collection = _collection_at(mapping, collection_path)
+    if not isinstance(collection, list):
+        return None
+    for index, value in enumerate(collection):
+        if isinstance(value, Mapping) and value.get("id") == identifier:
+            return collection_path + (index,), value
+    return None
+
+
+class SetSceneElementConditionCommand(EditCommand):
+    """Edit an object/look-region condition while retaining its field alias."""
+
+    operation = "set_scene_element_condition"
+
+    def __init__(self, selection: DefinitionSelection, element: Any, condition: Any = MISSING) -> None:
+        super().__init__(selection, ())
+        self.element = element
+        self.condition = _copy(condition)
+        self.value = self.condition
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        found = _scene_element_condition_location(model.mapping, self.element)
+        if found is None:
+            return ValidationResult.error("The selected scene element no longer exists.")
+        if self.condition is MISSING:
+            return ValidationResult.ok()
+        try:
+            parse_condition(self.condition)
+        except (ConditionError, TypeError, ValueError) as exc:
+            return ValidationResult.error(str(exc))
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        found = _scene_element_condition_location(working_copy.mapping, self.element)
+        if found is None:
+            raise KeyError("The selected scene element no longer exists")
+        path, _entry = found
+        target = _get_path(working_copy.mapping, path)
+        if not isinstance(target, dict):
+            raise TypeError("Scene elements must be mappings")
+        if self.condition is MISSING:
+            target.pop("visible_when", None)
+            target.pop("conditions", None)
+            return
+        key = "visible_when" if "visible_when" in target else ("conditions" if "conditions" in target else "visible_when")
         target[key] = _copy(self.condition)
 
 

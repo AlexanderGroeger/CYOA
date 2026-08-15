@@ -23,6 +23,17 @@ from .dialogue_presentation import (
     dialogue_sequence_references,
     present_dialogue_actions,
 )
+from .condition_editor import (
+    ConditionEditorModel,
+    ConditionNode,
+    ConditionTreeModel,
+    GROUP_TYPES,
+    LEAF_TYPES,
+    NODE_TYPES,
+    PARAMETER_TYPES,
+    condition_mode,
+    validate_condition_value,
+)
 from .editing import (
     DefinitionWorkingCopy,
     EditCommand,
@@ -35,6 +46,7 @@ from .editing import (
     RemoveNavigationEntryCommand,
     SetNavigationDestinationCommand,
     SetNavigationConditionCommand,
+    SetSceneElementConditionCommand,
     SetDialogueTextCommand,
     SetDialogueConditionCommand,
     SetDialogueMetadataCommand,
@@ -91,6 +103,7 @@ __all__ = [
     "RemoveNavigationEntryCommand",
     "SetNavigationDestinationCommand",
     "SetNavigationConditionCommand",
+    "SetSceneElementConditionCommand",
     "SetDialogueTextCommand",
     "SetDialogueConditionCommand",
     "SetDialogueMetadataCommand",
@@ -150,4 +163,13 @@ __all__ = [
     "DialogueSourcePresentation",
     "dialogue_sequence_references",
     "present_dialogue_actions",
+    "ConditionEditorModel",
+    "ConditionNode",
+    "ConditionTreeModel",
+    "GROUP_TYPES",
+    "LEAF_TYPES",
+    "NODE_TYPES",
+    "PARAMETER_TYPES",
+    "condition_mode",
+    "validate_condition_value",
 ]

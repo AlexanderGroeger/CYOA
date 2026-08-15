@@ -41,6 +41,14 @@ class ConditionState(Protocol):
     def has_item(self, item_id: Any, quantity: Any = 1) -> bool: ...
 
 
+# Public authoring metadata for tools.  Evaluation and validation below remain
+# the authority; these tuples only let editors discover the existing
+# vocabulary without maintaining a second operator list.
+STRUCTURED_GROUP_OPERATORS = ("all", "any", "not")
+STRUCTURED_LEAF_OPERATORS = ("flag", "variable", "var", "has_item")
+STRUCTURED_LEAF_PARAMETERS = ("equals", "not_equals", "exists", "quantity")
+
+
 @dataclass(frozen=True)
 class ConditionSymbols:
     """Names referenced by a static condition, separated by state scope."""
