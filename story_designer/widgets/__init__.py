@@ -8,6 +8,7 @@ from .scene_editor import ResizeHandleItem, SceneCanvasView, SceneEditorWidget, 
 from .navigation_panel import NavigationPanel
 from .dialogue_editor import DialogueEditorWidget
 from .workspace import WorkspaceWidget
+from .test_state import TestStateDialog
 
 __all__ = [
     "AssetPathEditor",
@@ -23,4 +24,5 @@ __all__ = [
     "NavigationPanel",
     "DialogueEditorWidget",
     "WorkspaceWidget",
+    "TestStateDialog",
 ]

@@ -31,6 +31,11 @@ from engine.core.exploration import (
 )
 from engine.core.game_over import GameOverPresentation, GameOverStage
 from engine.core.game_state import GameState
+from engine.core.developer_test import (
+    DeveloperTestConfigError,
+    SceneTestConfiguration,
+    apply_developer_test_configuration,
+)
 from engine.core.inventory import InventoryActionError, InventoryGrid, InventoryLayout, InventoryService
 from engine.core.story_interpreter import StoryInterpreter, Transition
 from engine.errors import AssetNotFoundError, SaveVersionError, StoryValidationError
@@ -54,7 +59,18 @@ class GameEngine:
     OPTION_SELECT_DELAY_MS = 1_000
     DIALOGUE_PAGE_DELAY_MS = 200
 
-    def __init__(self, story_dir: str, shared_dir: str = "shared_assets", save_slot: str = "slot1", disable_animation_delay: bool = False):
+    def __init__(
+        self,
+        story_dir: str,
+        shared_dir: str = "shared_assets",
+        save_slot: str = "slot1",
+        disable_animation_delay: bool = False,
+        *,
+        developer_mode: bool = False,
+        start_scene_override: str | None = None,
+        developer_test_config_path: str | Path | None = None,
+        developer_test_config: SceneTestConfiguration | None = None,
+    ):
         self.story_dir = Path(story_dir)
         self.assets = AssetLoader(story_dir, shared_dir)
         self.manifest = self.assets.load_manifest()
@@ -82,6 +98,33 @@ class GameEngine:
         self.story_version = str(self.manifest.get("version", "0.0"))
         self.save_slot, self.save_dir = save_slot, self.story_dir / "saves"
         self.state = GameState.new_from_manifest(self.manifest, self.player_profile)
+        if developer_test_config_path is not None and developer_test_config is not None:
+            raise DeveloperTestConfigError(
+                "Provide only one of developer_test_config_path and developer_test_config"
+            )
+        if developer_test_config_path is not None:
+            if not developer_mode:
+                raise DeveloperTestConfigError("Developer test configuration requires developer mode")
+            developer_test_config = SceneTestConfiguration.from_json(developer_test_config_path)
+        if developer_test_config is not None:
+            if not developer_mode:
+                raise DeveloperTestConfigError("Developer test configuration requires developer mode")
+            apply_developer_test_configuration(
+                self.state,
+                developer_test_config,
+                known_items=self.items,
+            )
+        # This is intentionally a state-startup override rather than a
+        # mutation of the authored manifest.  All other fresh-game values
+        # still come from the normal manifest/profile initialization path.
+        self.developer_mode = bool(
+            developer_mode or start_scene_override is not None or developer_test_config is not None
+        )
+        selected_scene = start_scene_override
+        if selected_scene is None and developer_test_config is not None:
+            selected_scene = developer_test_config.scene_id
+        if selected_scene is not None:
+            self.state.current_scene = str(selected_scene)
         self._initialize_move_skill_defaults()
         self.interpreter = StoryInterpreter(
             self.assets,

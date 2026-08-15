@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QProcess, QSettings, QTimer, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
@@ -31,6 +32,9 @@ from .models import (
     normalize_story_root,
 )
 from .widgets import DiagnosticsWidget, InspectorWidget, ProjectBrowser, WorkspaceWidget
+from .widgets.test_state import TestStateDialog
+from .services.runtime_test import SceneTestConfiguration, SceneTestLaunch, resolve_scene_id
+from engine.core.developer_test import DeveloperTestConfigError
 
 
 class MainWindow(QMainWindow):
@@ -42,6 +46,17 @@ class MainWindow(QMainWindow):
         self.resize(1280, 760)
         self.settings = QSettings("CYOA", "Story Designer")
         self.session = ProjectSession()
+        self.test_process: QProcess | None = None
+        self._test_scene_id: str | None = None
+        self._test_output: list[str] = []
+        self._test_error_reported = False
+        self._test_configuration = SceneTestConfiguration()
+        self._test_config_path: Path | None = None
+        self._test_context_valid = False
+        self._pending_restart = False
+        self._termination_for_restart = False
+        self._test_stop_was_requested = False
+        self._closing = False
 
         self.browser = ProjectBrowser()
         self.inspector = InspectorWidget(self.session)
@@ -138,7 +153,21 @@ class MainWindow(QMainWindow):
         scene_menu.addSeparator()
         scene_menu.addAction(self.workspace.scene_editor.duplicate_action)
         scene_menu.addAction(self.workspace.scene_editor.delete_action)
-        self.menuBar().addMenu("Test")
+        test_menu = self.menuBar().addMenu("Test")
+        self.configure_test_state_action = QAction("Configure Test State...", self)
+        self.configure_test_state_action.triggered.connect(self.configure_test_state)
+        test_menu.addAction(self.configure_test_state_action)
+        test_menu.addSeparator()
+        self.test_current_scene_action = QAction("Test Current Scene", self)
+        self.test_current_scene_action.setStatusTip("Launch the pygame runtime in the selected scene")
+        self.test_current_scene_action.triggered.connect(self.test_current_scene)
+        test_menu.addAction(self.test_current_scene_action)
+        self.restart_test_action = QAction("Restart Test", self)
+        self.restart_test_action.triggered.connect(self.restart_test)
+        test_menu.addAction(self.restart_test_action)
+        self.stop_test_action = QAction("Stop Test", self)
+        self.stop_test_action.triggered.connect(self.stop_test)
+        test_menu.addAction(self.stop_test_action)
         help_menu = self.menuBar().addMenu("Help")
         about_action = QAction("About Story Designer", self)
         about_action.triggered.connect(self._show_about)
@@ -171,6 +200,8 @@ class MainWindow(QMainWindow):
                 detail += "\n\n" + "\n".join(item.format() for item in diagnostics)
             QMessageBox.critical(self, "Could not open story", detail)
             return False
+        self._test_configuration = SceneTestConfiguration()
+        self._test_context_valid = False
         self.settings.setValue("lastStoryPath", str(root))
         self._remember_recent(root)
         self._refresh_views()
@@ -181,6 +212,8 @@ class MainWindow(QMainWindow):
         if not self._confirm_unsaved_changes("close this story"):
             return False
         self.session.close()
+        self._test_configuration = SceneTestConfiguration()
+        self._test_context_valid = False
         self._refresh_views()
         self.statusBar().showMessage("No story loaded")
         return True
@@ -315,6 +348,237 @@ class MainWindow(QMainWindow):
         self._refresh_views()
         self.statusBar().showMessage("Story validation refreshed")
 
+    def current_scene_id(self) -> str | None:
+        """Return the scene represented by the current editor context."""
+
+        project = self.session.project
+        if project is None:
+            return None
+        selection = self.session.selection
+        scene_id = resolve_scene_id(selection, project)
+        if scene_id is not None:
+            return scene_id
+        # A non-scene top-level selection must not inherit stale graphical
+        # context from a previously displayed scene.  Current scene-local
+        # selections already keep the parent scene in ``session.selection``;
+        # the fallbacks below are only for editor-local selections when the
+        # top-level selection is absent.
+        if selection is not None:
+            return None
+        # Scene-local selections are intentionally editor-only and normally
+        # leave ``session.selection`` on the parent scene.  These fallbacks
+        # also keep the command useful if a future editor changes that rule.
+        editor = self.workspace.scene_editor
+        for local_selection in (
+            getattr(editor, "selected_element", None),
+            getattr(getattr(editor, "navigation_panel", None), "selected_entry", None),
+            getattr(self.workspace.dialogue_editor, "selected_entry", None),
+        ):
+            scene_id = resolve_scene_id(local_selection, project)
+            if scene_id is not None:
+                return scene_id
+        return None
+
+    @property
+    def test_process_running(self) -> bool:
+        return self.test_process is not None and self.test_process.state() != QProcess.ProcessState.NotRunning
+
+    def configure_test_state(self) -> bool:
+        """Edit the reusable, ephemeral launch-time test state."""
+
+        if self.session.project is None:
+            self.statusBar().showMessage("Open a story before configuring test state")
+            return False
+        dialog = TestStateDialog(self.session.project, self._test_configuration, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        try:
+            self._test_configuration = dialog.configuration()
+        except DeveloperTestConfigError as exc:
+            QMessageBox.warning(self, "Invalid Test State", str(exc))
+            return False
+        self.statusBar().showMessage("Test state updated")
+        self._update_action_state()
+        return True
+
+    def _prepare_test_launch(self, scene_id: str) -> bool:
+        if self.session.story_root is None:
+            return False
+        if self.session.is_dirty and not self.save_story():
+            return False
+        self.session.validate()
+        if self.session.diagnostics.errors:
+            answer = QMessageBox.warning(
+                self,
+                "Story validation errors",
+                "The story contains validation errors. Test the scene anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return False
+        return True
+
+    def test_current_scene(self) -> bool:
+        """Save the authored project and launch one independent pygame test."""
+
+        scene_id = self.current_scene_id()
+        if scene_id is None or self.session.story_root is None:
+            self.statusBar().showMessage("Select a scene to test")
+            return False
+        if self.test_process_running:
+            self.statusBar().showMessage(f"Already testing: {self._test_scene_id or scene_id}")
+            return False
+
+        if not self._prepare_test_launch(scene_id):
+            return False
+        return self._launch_test(scene_id)
+
+    def _launch_test(self, scene_id: str) -> bool:
+        """Create one temporary config and start the child process."""
+        if self.session.story_root is None or self.test_process_running:
+            return False
+        try:
+            temporary = tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", suffix=".json", prefix="cyoa-test-", delete=False
+            )
+            temporary.close()
+            self._test_config_path = Path(temporary.name)
+            self._test_configuration.write_json(self._test_config_path)
+        except (OSError, DeveloperTestConfigError) as exc:
+            if self._test_config_path is not None:
+                self._cleanup_test_config()
+            QMessageBox.critical(self, "Could not prepare test state", str(exc))
+            return False
+        launch = SceneTestLaunch(
+            story_root=self.session.story_root,
+            scene_id=scene_id,
+            shared_assets_root=self.session.shared_assets_root,
+            test_config_path=self._test_config_path,
+        )
+        program, arguments, working_directory = launch.command()
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+        process.readyReadStandardOutput.connect(self._read_test_stdout)
+        process.readyReadStandardError.connect(self._read_test_stderr)
+        process.errorOccurred.connect(self._on_test_process_error)
+        process.finished.connect(self._on_test_process_finished)
+        self.test_process = process
+        self._test_scene_id = scene_id
+        self._test_output = []
+        self._test_error_reported = False
+        self._test_context_valid = True
+        process.start(program, arguments)
+        self.statusBar().showMessage(f"Testing: {scene_id}")
+        self._update_action_state()
+        return True
+
+    def restart_test(self) -> bool:
+        """Restart asynchronously with the selected scene and current state."""
+
+        scene_id = self.current_scene_id()
+        if scene_id is None or self.session.story_root is None:
+            self.statusBar().showMessage("Select a scene to restart")
+            return False
+        if not self._test_context_valid and not self.test_process_running:
+            return self.test_current_scene()
+        if not self._prepare_test_launch(scene_id):
+            return False
+        self._pending_restart = True
+        if self.test_process_running:
+            self._request_test_termination(for_restart=True)
+            self.statusBar().showMessage("Restarting test...")
+            return True
+        self._pending_restart = False
+        return self._launch_test(scene_id)
+
+    def stop_test(self) -> bool:
+        if not self.test_process_running:
+            return False
+        self._pending_restart = False
+        self._request_test_termination(for_restart=False)
+        self.statusBar().showMessage("Stopping test...")
+        return True
+
+    def _request_test_termination(self, *, for_restart: bool) -> None:
+        process = self.test_process
+        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+            return
+        self._termination_for_restart = for_restart
+        self._test_stop_was_requested = not for_restart
+        process.terminate()
+        QTimer.singleShot(1500, lambda: self._force_kill_test_process(process))
+
+    def _force_kill_test_process(self, process: QProcess) -> None:
+        if self.test_process is process and process.state() != QProcess.ProcessState.NotRunning:
+            process.kill()
+
+    def _read_test_stdout(self) -> None:
+        if self.test_process is None:
+            return
+        data = bytes(self.test_process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        if data:
+            self._test_output.append(data)
+
+    def _read_test_stderr(self) -> None:
+        if self.test_process is None:
+            return
+        data = bytes(self.test_process.readAllStandardError()).decode("utf-8", errors="replace")
+        if data:
+            self._test_output.append(data)
+
+    def _on_test_process_error(self, error: QProcess.ProcessError) -> None:
+        if self._closing or self._test_error_reported:
+            return
+        if error != QProcess.ProcessError.FailedToStart:
+            # Crashes and other non-zero exits are reported by ``finished``
+            # together with captured stdout/stderr.
+            return
+        self._test_error_reported = True
+        detail = self.test_process.errorString() if self.test_process is not None else str(error)
+        QMessageBox.critical(self, "Could not launch test runtime", detail)
+        self.statusBar().showMessage("Test runtime failed to launch")
+        if self.test_process is None or self.test_process.state() == QProcess.ProcessState.NotRunning:
+            self._cleanup_test_config()
+
+    def _on_test_process_finished(self, exit_code: int, _exit_status: QProcess.ExitStatus) -> None:
+        self._read_test_stdout()
+        self._read_test_stderr()
+        scene_id = self._test_scene_id or "scene"
+        diagnostics = "".join(self._test_output).strip()
+        failed = exit_code != 0
+        restarting = self._pending_restart and not self._closing
+        stopping = self._test_stop_was_requested
+        self.test_process = None
+        self._test_scene_id = None
+        self._cleanup_test_config()
+        self._termination_for_restart = False
+        self._pending_restart = False if restarting else self._pending_restart
+        self._update_action_state()
+        if self._closing:
+            return
+        if restarting:
+            next_scene = self.current_scene_id()
+            if next_scene is not None and self._prepare_test_launch(next_scene):
+                self._launch_test(next_scene)
+            else:
+                self.statusBar().showMessage("Test restart cancelled")
+            return
+        if stopping:
+            self._test_stop_was_requested = False
+            self.statusBar().showMessage("Test stopped")
+            return
+        if failed and not self._test_error_reported:
+            detail = f"The test runtime exited with code {exit_code}."
+            if diagnostics:
+                detail += f"\n\n{diagnostics}"
+            QMessageBox.critical(self, "Test runtime failed", detail)
+            self.statusBar().showMessage("Test runtime failed")
+        elif failed:
+            self.statusBar().showMessage("Test runtime failed to launch")
+        else:
+            self.statusBar().showMessage(f"Test finished: {scene_id}")
+
     def _on_browser_selection(self, selection: DefinitionSelection | None) -> None:
         self.session.select(selection)
         self._refresh_views()
@@ -420,6 +684,14 @@ class MainWindow(QMainWindow):
             and self.session.selection is not None
             and self.session.is_definition_dirty(self.session.selection)
         )
+        self.test_current_scene_action.setEnabled(
+            has_project and self.current_scene_id() is not None and not self.test_process_running
+        )
+        self.configure_test_state_action.setEnabled(has_project)
+        self.restart_test_action.setEnabled(
+            has_project and (self._test_context_valid or self.test_process_running)
+        )
+        self.stop_test_action.setEnabled(self.test_process_running)
 
     def _restore_window_state(self) -> None:
         geometry = self.settings.value("windowGeometry")
@@ -459,9 +731,33 @@ class MainWindow(QMainWindow):
         if not self._confirm_unsaved_changes("exit"):
             event.ignore()
             return
+        self._closing = True
+        self._stop_test_process()
         self.settings.setValue("windowGeometry", self.saveGeometry())
         self.settings.setValue("windowState", self.saveState())
         event.accept()
+
+    def _stop_test_process(self) -> None:
+        process = self.test_process
+        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+            return
+        process.terminate()
+        if not process.waitForFinished(1500):
+            process.kill()
+            process.waitForFinished(1500)
+        self.test_process = None
+        self._test_scene_id = None
+        self._cleanup_test_config()
+
+    def _cleanup_test_config(self) -> None:
+        path = self._test_config_path
+        self._test_config_path = None
+        if path is None:
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 class StorySelectionDialog(QDialog):
