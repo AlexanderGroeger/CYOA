@@ -299,6 +299,20 @@ class NavigationPanel(QWidget):
                 return row
         return None
 
+    def focus_path(self, path: tuple[str | int, ...]) -> bool:
+        """Select an authored navigation entry without changing its value."""
+        if self.scene_id is None or not path:
+            return False
+        selection = NavigationEntrySelection(self.scene_id, tuple(path))
+        row = self._row_for_selection(selection)
+        if row is None:
+            return False
+        self.entries.setCurrentRow(row)
+        self.selected_entry = selection
+        self._populate_detail()
+        self.navigation_selected.emit(selection)
+        return True
+
     def _update_enabled_state(self) -> None:
         has_entry = self.selected_entry is not None
         self.add_button.setEnabled(self.project is not None and self.scene_id is not None)

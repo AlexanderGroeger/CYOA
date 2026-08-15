@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from engine.story_core import StoryCoreError, StoryProjectLoadError
+from engine.story_core import ContentKind, StoryCoreError, StoryProjectLoadError
 
 from .models import (
     DefinitionSelection,
@@ -32,6 +32,7 @@ from .models import (
     normalize_story_root,
 )
 from .widgets import AssetBrowserWidget, DiagnosticsWidget, InspectorWidget, ProjectBrowser, WorkspaceWidget
+from .models import SceneGraphEdge
 from .widgets.test_state import TestStateDialog
 from .services.runtime_test import SceneTestConfiguration, SceneTestLaunch, resolve_scene_id
 from engine.core.developer_test import DeveloperTestConfigError
@@ -74,6 +75,9 @@ class MainWindow(QMainWindow):
         self.workspace.scene_editor.open_destination_scene.connect(self._open_destination_scene)
         self.workspace.dialogue_changed.connect(lambda _ref: self._refresh_views())
         self.workspace.dialogue_entry_selected.connect(lambda _ref: self.inspector.clear_scene_element())
+        self.workspace.graph_scene_selected.connect(self._on_graph_selection)
+        self.workspace.graph_scene_open_requested.connect(self._open_graph_scene)
+        self.workspace.graph_open_navigation.connect(self._open_graph_navigation)
         self.workspace.scene_editor.geometry_error.connect(self.statusBar().showMessage)
         self.inspector.scene_geometry_edited.connect(self._on_scene_geometry_edit)
         self.inspector.state_changed.connect(self._on_inspector_state_changed)
@@ -150,6 +154,11 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.inspector_dock.toggleViewAction())
         view_menu.addAction(self.diagnostics_dock.toggleViewAction())
         view_menu.addAction(self.assets_dock.toggleViewAction())
+        self.scene_graph_action = QAction("Scene Graph", self)
+        self.scene_graph_action.setShortcut(QKeySequence("Ctrl+Shift+G"))
+        self.scene_graph_action.triggered.connect(self.workspace.show_scene_graph)
+        view_menu.addSeparator()
+        view_menu.addAction(self.scene_graph_action)
 
         story_menu = self.menuBar().addMenu("Story")
         validate_action = QAction("Validate Story", self)
@@ -590,6 +599,35 @@ class MainWindow(QMainWindow):
     def _on_browser_selection(self, selection: DefinitionSelection | None) -> None:
         self.session.select(selection)
         self._refresh_views()
+
+    def _on_graph_selection(self, selection: DefinitionSelection | None) -> None:
+        """Route graph node selection through the normal project selection."""
+        self.session.select(selection)
+        self._refresh_views()
+
+    def _open_graph_scene(self, scene_id: str) -> None:
+        project = self.session.project
+        if project is None or project.index is None:
+            return
+        entry = project.index.entry(ContentKind.SCENE, scene_id)
+        if entry is None:
+            return
+        self.session.select(DefinitionSelection(ContentKind.SCENE, scene_id, entry.source))
+        self.workspace.open_scene_editor()
+        self._refresh_views()
+        self.statusBar().showMessage(f"Opened scene {scene_id}")
+
+    def _open_graph_navigation(self, edge: SceneGraphEdge) -> None:
+        project = self.session.project
+        if project is None or project.index is None:
+            return
+        entry = project.index.entry(ContentKind.SCENE, edge.source_scene_id)
+        if entry is None:
+            return
+        self.session.select(DefinitionSelection(ContentKind.SCENE, edge.source_scene_id, entry.source))
+        self.workspace.open_scene_editor()
+        self._refresh_views()
+        self.workspace.scene_editor.focus_navigation_path(edge.source_path)
 
     def _open_destination_scene(self, scene_id: str) -> None:
         project = self.session.project

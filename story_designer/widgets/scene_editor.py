@@ -797,6 +797,10 @@ class SceneEditorWidget(QWidget):
             source = entry.source if entry is not None else None
         return DefinitionSelection(ContentKind.SCENE, scene_id, source)
 
+    def focus_navigation_path(self, path: tuple[str | int, ...]) -> bool:
+        """Focus one existing exploration navigation entry in the side panel."""
+        return self.navigation_panel.focus_path(tuple(path))
+
     def _refresh_authoritative(self, ref: SceneElementSelection | None) -> None:
         if self.session is None or self.session.project is None:
             return

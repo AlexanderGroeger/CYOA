@@ -12,6 +12,7 @@ from engine.story_core import ContentKind, Diagnostics, StoryProject
 from ..models import DefinitionSelection, ProjectSession
 from .scene_editor import SceneEditorWidget
 from .dialogue_editor import DialogueEditorWidget
+from .scene_graph import SceneGraphWidget
 
 
 class WorkspaceWidget(QWidget):
@@ -20,6 +21,9 @@ class WorkspaceWidget(QWidget):
     scene_element_selected = Signal(object)
     dialogue_entry_selected = Signal(object)
     dialogue_changed = Signal(object)
+    graph_scene_selected = Signal(object)
+    graph_scene_open_requested = Signal(str)
+    graph_open_navigation = Signal(object)
 
     def __init__(self, session: ProjectSession | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -42,6 +46,11 @@ class WorkspaceWidget(QWidget):
         self.dialogue_editor.entry_selected.connect(self.dialogue_entry_selected)
         self.dialogue_editor.dialogue_changed.connect(self.dialogue_changed)
         self.scene_editor.open_dialogue_sequence.connect(self.open_dialogue_sequence)
+        self.scene_graph = SceneGraphWidget(session)
+        self.tabs.addTab(self.scene_graph, "Scene Graph")
+        self.scene_graph.scene_selected.connect(self.graph_scene_selected)
+        self.scene_graph.scene_open_requested.connect(self.graph_scene_open_requested)
+        self.scene_graph.open_navigation_entry.connect(self.graph_open_navigation)
         layout = QVBoxLayout(self)
         layout.addWidget(self.tabs)
         self.clear()
@@ -52,6 +61,7 @@ class WorkspaceWidget(QWidget):
         self.tabs.setCurrentIndex(0)
         self.scene_editor.clear()
         self.dialogue_editor.clear()
+        self.scene_graph.clear()
 
     def set_state(
         self,
@@ -63,6 +73,7 @@ class WorkspaceWidget(QWidget):
         if project is None:
             self.clear()
             return
+        self.scene_graph.set_state(project, selection, definition, diagnostics)
         if selection is None or definition is None:
             self.overview_title.setText(project.manifest.title or project.manifest.id)
             self.overview.setPlainText(_project_summary(project, diagnostics))
@@ -73,7 +84,10 @@ class WorkspaceWidget(QWidget):
                 mapping = definition.to_mapping()
             self.scene_editor.set_scene(project, selection.id, mapping)
             self.dialogue_editor.set_scene(project, selection.id, mapping)
-            self.tabs.setCurrentWidget(self.scene_editor)
+            if self.tabs.currentWidget() is self.scene_graph:
+                self.scene_graph.select_scene(selection.id, emit=False)
+            else:
+                self.tabs.setCurrentWidget(self.scene_editor)
             return
         self.tabs.setCurrentIndex(0)
         self.dialogue_editor.clear()
@@ -90,6 +104,13 @@ class WorkspaceWidget(QWidget):
 
         if self.dialogue_editor.select_source(f"sequence:{sequence_id}"):
             self.tabs.setCurrentWidget(self.dialogue_editor)
+
+    def open_scene_editor(self) -> None:
+        """Show the existing scene editor for the current scene selection."""
+        self.tabs.setCurrentWidget(self.scene_editor)
+
+    def show_scene_graph(self) -> None:
+        self.tabs.setCurrentWidget(self.scene_graph)
 
 
 def _project_summary(project: StoryProject, diagnostics: Diagnostics) -> str:

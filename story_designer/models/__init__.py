@@ -1,6 +1,7 @@
 """Application state models used by the Story Designer."""
 
 from .project_session import DefinitionSelection, ProjectSession, normalize_story_root
+from .scene_graph import GraphEdgeKind, SceneGraphEdge, SceneGraphModel, SceneGraphNode, summarize_condition
 from .assets import AssetBrowserModel, AssetRecord
 from .scene_presentation import (
     LookRegionPresentation,
@@ -94,6 +95,11 @@ from .persistence import (
 
 __all__ = [
     "DefinitionSelection",
+    "GraphEdgeKind",
+    "SceneGraphEdge",
+    "SceneGraphModel",
+    "SceneGraphNode",
+    "summarize_condition",
     "AssetBrowserModel",
     "AssetRecord",
     "DefinitionWorkingCopy",

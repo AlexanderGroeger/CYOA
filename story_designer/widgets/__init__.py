@@ -11,6 +11,7 @@ from .workspace import WorkspaceWidget
 from .test_state import TestStateDialog
 from .condition_editor import ConditionEditorWidget
 from .asset_browser import AssetBrowserDialog, AssetBrowserWidget
+from .scene_graph import SceneGraphCanvas, SceneGraphEdgeItem, SceneGraphNodeItem, SceneGraphWidget
 
 __all__ = [
     "AssetPathEditor",
@@ -30,4 +31,8 @@ __all__ = [
     "ConditionEditorWidget",
     "AssetBrowserDialog",
     "AssetBrowserWidget",
+    "SceneGraphCanvas",
+    "SceneGraphEdgeItem",
+    "SceneGraphNodeItem",
+    "SceneGraphWidget",
 ]
