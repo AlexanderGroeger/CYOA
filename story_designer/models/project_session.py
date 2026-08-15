@@ -262,7 +262,7 @@ class ProjectSession:
         model = self.property_model(command.selection)
         if copy is None or model is None:
             raise KeyError(f"Unknown definition selection: {command.selection!r}")
-        validation = model.validate_command(command)
+        validation = command.validate(model) if hasattr(command, "validate") else model.validate_command(command)
         if not validation.valid:
             raise EditValidationError(command.path, validation.message)
         command.apply(copy)

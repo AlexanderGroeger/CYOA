@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -48,6 +49,7 @@ class InspectorWidget(QWidget):
     """Generate an editor form from the selected definition's schema."""
 
     state_changed = Signal()
+    scene_geometry_edited = Signal(object, object)
 
     def __init__(
         self,
@@ -60,8 +62,11 @@ class InspectorWidget(QWidget):
         self._project: StoryProject | None = None
         self._selection: DefinitionSelection | None = None
         self._definition: Any | None = None
+        self._diagnostics = Diagnostics()
+        self._scene_element = None
         self._rows: dict[tuple[str | int, ...], _PropertyRow] = {}
         self._object_groups: dict[str, QFormLayout] = {}
+        self._scene_geometry_fields: dict[str, QSpinBox] = {}
 
         self.header = QLabel("Inspector")
         self.header.setStyleSheet("font-size: 16px; font-weight: bold;")
@@ -88,6 +93,10 @@ class InspectorWidget(QWidget):
         self.fields_layout = QVBoxLayout(self.fields_container)
         self.fields_layout.setContentsMargins(0, 0, 0, 0)
         self.fields_layout.addLayout(self.fields_form)
+        self.scene_geometry_box = QGroupBox("Geometry")
+        self.scene_geometry_form = QFormLayout(self.scene_geometry_box)
+        self.fields_layout.addWidget(self.scene_geometry_box)
+        self.scene_geometry_box.hide()
 
         self.property_scroll = QScrollArea()
         self.property_scroll.setWidgetResizable(True)
@@ -122,6 +131,7 @@ class InspectorWidget(QWidget):
         self._project = None
         self._selection = None
         self._definition = None
+        self._scene_element = None
         self.header.setText("Inspector")
         self.type_value.setText("—")
         self.id_value.setText("—")
@@ -130,6 +140,9 @@ class InspectorWidget(QWidget):
         self.validation_value.setText("—")
         self.summary.clear()
         self.revert_button.setEnabled(False)
+        self.property_scroll.setEnabled(True)
+        self.scene_geometry_box.hide()
+        self._scene_geometry_fields.clear()
         self._clear_form()
 
     def set_selection(
@@ -142,6 +155,10 @@ class InspectorWidget(QWidget):
         self._project = project
         self._selection = selection
         self._definition = definition
+        self._diagnostics = diagnostics
+        self._scene_element = None
+        self.property_scroll.setEnabled(True)
+        self.scene_geometry_box.hide()
         if project is None or selection is None or definition is None:
             self.clear()
             return
@@ -163,6 +180,78 @@ class InspectorWidget(QWidget):
         self.validation_value.setText(status)
         self._update_snapshot()
         self._build_form()
+        self._update_header()
+
+    def set_scene_element(self, selection: object, authored: Mapping[str, Any]) -> None:
+        """Show one nested scene element and its editable geometry controls."""
+
+        self._scene_element = selection
+        self.property_scroll.setEnabled(True)
+        self._build_scene_geometry(selection, authored)
+        kind = getattr(selection, "kind", "element").replace("_", " ").title()
+        identifier = getattr(selection, "id", "")
+        self.header.setText(f"Scene {kind}: {identifier}")
+        self.type_value.setText(f"Scene {kind}")
+        self.id_value.setText(identifier)
+        self.definition_value.setText("Authored scene element (read-only preview)")
+        self.validation_value.setText("Conditional" if "visible_when" in authored or "conditions" in authored else "Authored")
+        self.summary.setPlainText(_compact_mapping(authored))
+
+    def _build_scene_geometry(self, selection: object, authored: Mapping[str, Any]) -> None:
+        while self.scene_geometry_form.rowCount():
+            self.scene_geometry_form.removeRow(0)
+        self._scene_geometry_fields.clear()
+        kind = getattr(selection, "kind", "")
+        if kind == "object":
+            raw = authored.get("position", (0, 0))
+            values = list(raw) if isinstance(raw, (list, tuple)) and len(raw) == 2 else [0, 0]
+            names = ("x", "y")
+        elif kind == "look_region":
+            raw = authored.get("rect", authored.get("hitbox"))
+            look = authored.get("look")
+            if raw is None and isinstance(look, Mapping):
+                raw = look.get("rect", look.get("hitbox"))
+            values = list(raw) if isinstance(raw, (list, tuple)) and len(raw) == 4 else [0, 0, 1, 1]
+            names = ("x", "y", "width", "height")
+        else:
+            self.scene_geometry_form.addRow(QLabel("This element has no graphical geometry editor."))
+            self.scene_geometry_box.show()
+            return
+        for index, name in enumerate(names):
+            editor = QSpinBox()
+            editor.setRange(-1_000_000, 1_000_000)
+            if name in {"width", "height"}:
+                editor.setMinimum(1)
+            editor.setValue(int(values[index]))
+            editor.editingFinished.connect(lambda ref=selection: self._emit_scene_geometry(ref))
+            self._scene_geometry_fields[name] = editor
+            self.scene_geometry_form.addRow(name.title(), editor)
+        self.scene_geometry_box.show()
+
+    def _emit_scene_geometry(self, selection: object) -> None:
+        if not self._scene_geometry_fields or selection is not self._scene_element:
+            return
+        values = tuple(self._scene_geometry_fields[name].value() for name in self._scene_geometry_fields)
+        self.scene_geometry_edited.emit(selection, values)
+
+    def clear_scene_element(self) -> None:
+        """Return the Inspector to the selected top-level definition."""
+
+        if self._scene_element is None:
+            return
+        self._scene_element = None
+        self.property_scroll.setEnabled(True)
+        self.scene_geometry_box.hide()
+        self._scene_geometry_fields.clear()
+        if self._project is None or self._selection is None or self._definition is None:
+            self.clear()
+            return
+        self.type_value.setText(_display_kind(self._selection.kind))
+        self.id_value.setText(self._selection.id)
+        source = getattr(self._definition, "source", self._selection.source)
+        self.source_value.setText(_relative_source(self._project.story_root, source))
+        self.definition_value.setText(type(self._definition).__name__)
+        self._update_snapshot()
         self._update_header()
 
     def _build_form(self) -> None:
@@ -421,7 +510,12 @@ class InspectorWidget(QWidget):
             self.revert_button.setEnabled(False)
             return
         dirty = self.session is not None and self.session.is_definition_dirty(self._selection)
-        self.header.setText(f"{_display_kind(self._selection.kind)}: {self._selection.id}{' *' if dirty else ''}")
+        if self._scene_element is not None:
+            kind = getattr(self._scene_element, "kind", "element").replace("_", " ").title()
+            identifier = getattr(self._scene_element, "id", "")
+            self.header.setText(f"Scene {kind}: {identifier}{' *' if dirty else ''}")
+        else:
+            self.header.setText(f"{_display_kind(self._selection.kind)}: {self._selection.id}{' *' if dirty else ''}")
         self.revert_button.setEnabled(bool(dirty))
 
     def _clear_form(self) -> None:

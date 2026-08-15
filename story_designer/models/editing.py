@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from engine.story_core import Schema, StoryProject, TypeSpec
+from engine.story_core.conditions import ConditionError, parse_condition
 from engine.story_core.schema import FieldSpec, MISSING
 
 from .project_session import DefinitionSelection
@@ -566,6 +567,11 @@ class EditCommand:
     def apply(self, working_copy: DefinitionWorkingCopy) -> None:
         raise NotImplementedError
 
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        """Return validation for this command before it touches working state."""
+
+        return model.validate_command(self)
+
     def undo(self, working_copy: DefinitionWorkingCopy) -> None:
         """Restore the authored value that existed before this command."""
 
@@ -605,14 +611,455 @@ class RemovePropertyCommand(EditCommand):
         working_copy.remove_value(self.path)
 
 
+@dataclass(frozen=True)
+class GeometryChange:
+    """One authored geometry path changed by a completed visual gesture."""
+
+    path: PropertyPath
+    shape: str
+    old_value: tuple[int, ...]
+    new_value: tuple[int, ...]
+
+
+class SetGeometryCommand(EditCommand):
+    """Atomically apply all fields changed by one scene geometry gesture."""
+
+    operation = "set_geometry"
+
+    def __init__(self, selection: DefinitionSelection, element: Any, changes: Sequence[GeometryChange]) -> None:
+        changes = tuple(changes)
+        if not changes:
+            raise ValueError("A geometry command requires at least one change")
+        super().__init__(selection, changes[0].path)
+        self.element = element
+        self.changes = changes
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        for change in self.changes:
+            if change.shape == "point":
+                if not _valid_geometry_point(change.new_value):
+                    return ValidationResult.error("Position must contain two integer coordinates.")
+            elif change.shape == "rect":
+                if not _valid_geometry_rect(change.new_value):
+                    return ValidationResult.error("Rectangle must contain integer x, y, width, height with positive size.")
+            else:
+                return ValidationResult.error(f"Unsupported geometry shape: {change.shape!r}.")
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        self.old_authored_value = _copy(working_copy.value(self.path))
+        for change in self.changes:
+            # YAML geometry is authored as a sequence, even though the editor
+            # uses immutable tuples while calculating a gesture preview.
+            working_copy.set_value(change.path, list(change.new_value))
+
+
+def _collection_at(mapping: Mapping[str, Any], path: PropertyPath) -> Any:
+    """Resolve a structural collection path without applying schema aliases."""
+
+    return _get_path(mapping, path, default=MISSING)
+
+
+def _collection_entries(collection: Any) -> tuple[tuple[Any, Any], ...]:
+    """Return collection entries while retaining list indexes and mapping keys."""
+
+    if isinstance(collection, list):
+        return tuple((index, value) for index, value in enumerate(collection))
+    if isinstance(collection, Mapping):
+        return tuple(collection.items())
+    return ()
+
+
+def _element_id(value: Any, key: Any = None) -> str | None:
+    if isinstance(value, Mapping) and isinstance(value.get("id"), str) and value["id"]:
+        return value["id"]
+    if isinstance(key, str) and key:
+        return key
+    return None
+
+
+def _scene_element_ids(mapping: Mapping[str, Any]) -> set[str]:
+    """Collect IDs from both scene-local element namespaces."""
+
+    result: set[str] = set()
+    exploration = mapping.get("exploration")
+    sources: list[Mapping[str, Any]] = []
+    if isinstance(exploration, Mapping):
+        sources.append(exploration)
+    sources.append(mapping)
+    for source in sources:
+        for key in ("objects", "look_regions"):
+            for entry_key, value in _collection_entries(source.get(key)):
+                identifier = _element_id(value, entry_key)
+                if identifier is not None:
+                    result.add(identifier)
+    return result
+
+
+def _ensure_collection_parent(mapping: dict[str, Any], path: PropertyPath) -> tuple[dict[str, Any], str | int]:
+    if not path:
+        raise KeyError("A collection path cannot be empty")
+    current: Any = mapping
+    for component in path[:-1]:
+        if not isinstance(component, (str, int)):
+            raise KeyError(f"Invalid collection path component: {component!r}")
+        if isinstance(current, dict):
+            if component not in current:
+                current[component] = {}
+            if component == "exploration" and not isinstance(current[component], Mapping):
+                current[component] = {}
+            current = current[component]
+        else:
+            raise KeyError(f"Cannot descend through collection path {path!r}")
+    if not isinstance(current, dict):
+        raise KeyError(f"Collection parent is not a mapping: {path!r}")
+    return current, path[-1]
+
+
+def _insert_collection_value(mapping: dict[str, Any], path: PropertyPath, value: Any, index: int | None) -> int | None:
+    parent, key = _ensure_collection_parent(mapping, path)
+    existing = parent.get(key, MISSING)
+    if existing is MISSING or existing is None:
+        existing = []
+        parent[key] = existing
+    if isinstance(existing, list):
+        position = len(existing) if index is None else max(0, min(index, len(existing)))
+        existing.insert(position, _copy(value))
+        return position
+    if isinstance(existing, dict):
+        identifier = _element_id(value)
+        if identifier is None:
+            raise ValueError("Mapping-backed scene elements require an id")
+        existing[identifier] = _copy(value)
+        return None
+    raise TypeError(f"Scene collection {path!r} must be a list or mapping")
+
+
+def _find_collection_value(mapping: Mapping[str, Any], path: PropertyPath, identifier: str) -> tuple[Any, Any, Any] | None:
+    collection = _collection_at(mapping, path)
+    for key, value in _collection_entries(collection):
+        if _element_id(value, key) == identifier:
+            return collection, key, value
+    return None
+
+
+def _remove_collection_value(mapping: dict[str, Any], path: PropertyPath, identifier: str) -> tuple[Any, Any, Any]:
+    found = _find_collection_value(mapping, path, identifier)
+    if found is None:
+        raise KeyError(f"Scene element {identifier!r} was not found at {path!r}")
+    collection, key, value = found
+    if isinstance(collection, list):
+        collection.pop(key)
+    else:
+        del collection[key]
+    return collection, key, value
+
+
+def _offset_element_geometry(value: Any, offset: tuple[int, int]) -> Any:
+    """Offset known geometry fields while leaving all other authored data intact."""
+
+    if not isinstance(value, Mapping):
+        return value
+    result = _copy(value)
+    dx, dy = offset
+    position = result.get("position")
+    if isinstance(position, list) and len(position) == 2:
+        result["position"] = [position[0] + dx, position[1] + dy]
+    elif isinstance(position, tuple) and len(position) == 2:
+        result["position"] = [position[0] + dx, position[1] + dy]
+    for geometry_key in ("rect", "hitbox"):
+        geometry = result.get(geometry_key)
+        if isinstance(geometry, (list, tuple)) and len(geometry) == 4:
+            result[geometry_key] = [geometry[0] + dx, geometry[1] + dy, geometry[2], geometry[3]]
+    look = result.get("look")
+    if isinstance(look, Mapping):
+        result["look"] = _offset_element_geometry(look, offset)
+    return result
+
+
+class StructuralEditCommand(EditCommand):
+    """Base for one atomic scene collection mutation.
+
+    The first application records both complete semantic snapshots.  Redo
+    reuses the accepted after snapshot, so it never regenerates IDs or loses
+    unknown sibling data.
+    """
+
+    operation = "structural_edit"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int]) -> None:
+        super().__init__(selection, collection_path)
+        self.collection_path = tuple(collection_path)
+        self._before_mapping: dict[str, Any] | None = None
+        self._after_mapping: dict[str, Any] | None = None
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        return ValidationResult.ok()
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        raise NotImplementedError
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        if self._after_mapping is not None:
+            working_copy.mapping = _copy(self._after_mapping)
+            return
+        self._before_mapping = working_copy.to_mapping()
+        self._apply_once(working_copy)
+        self._after_mapping = working_copy.to_mapping()
+
+    def undo(self, working_copy: DefinitionWorkingCopy) -> None:
+        if self._before_mapping is None:
+            raise RuntimeError("Structural command has not been applied")
+        working_copy.mapping = _copy(self._before_mapping)
+
+
+class InsertSceneElementCommand(StructuralEditCommand):
+    """Insert one complete authored object/region into its existing collection."""
+
+    operation = "insert_scene_element"
+
+    def __init__(
+        self,
+        selection: DefinitionSelection,
+        collection_path: Sequence[str | int],
+        element: Mapping[str, Any],
+        *,
+        index: int | None = None,
+    ) -> None:
+        super().__init__(selection, collection_path)
+        self.element = _copy(dict(element))
+        self.index = index
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        identifier = _element_id(self.element)
+        if identifier is None:
+            raise ValueError("A scene element requires a non-empty id")
+        if identifier in _scene_element_ids(working_copy.mapping):
+            raise ValueError(f"Scene element id {identifier!r} is already in use")
+        self.index = _insert_collection_value(working_copy.mapping, self.collection_path, self.element, self.index)
+
+
+class RemoveSceneElementCommand(StructuralEditCommand):
+    """Remove one element while retaining its exact prior collection position."""
+
+    operation = "remove_scene_element"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int], element_id: str) -> None:
+        super().__init__(selection, collection_path)
+        self.element_id = str(element_id)
+        self.removed_element: Any = MISSING
+        self.index: int | None = None
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        collection, key, value = _remove_collection_value(working_copy.mapping, self.collection_path, self.element_id)
+        self.removed_element = _copy(value)
+        self.index = key if isinstance(collection, list) and isinstance(key, int) else None
+
+
+class DuplicateSceneElementCommand(StructuralEditCommand):
+    """Deep-copy an element, changing only its own ID and known geometry."""
+
+    operation = "duplicate_scene_element"
+
+    def __init__(
+        self,
+        selection: DefinitionSelection,
+        collection_path: Sequence[str | int],
+        source_id: str,
+        duplicate_id: str,
+        *,
+        offset: tuple[int, int] = (8, 8),
+    ) -> None:
+        super().__init__(selection, collection_path)
+        self.source_id = str(source_id)
+        self.duplicate_id = str(duplicate_id)
+        self.offset = (int(offset[0]), int(offset[1]))
+        self.duplicate_element: Any = MISSING
+        self.index: int | None = None
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        if self.duplicate_id in _scene_element_ids(working_copy.mapping):
+            raise ValueError(f"Scene element id {self.duplicate_id!r} is already in use")
+        found = _find_collection_value(working_copy.mapping, self.collection_path, self.source_id)
+        if found is None:
+            raise KeyError(f"Scene element {self.source_id!r} was not found at {self.collection_path!r}")
+        _collection, key, source = found
+        if not isinstance(source, Mapping):
+            raise TypeError("Scene elements must be mappings")
+        duplicate = _offset_element_geometry(source, self.offset)
+        duplicate["id"] = self.duplicate_id
+        self.duplicate_element = _copy(duplicate)
+        self.index = key + 1 if isinstance(key, int) else None
+        _insert_collection_value(working_copy.mapping, self.collection_path, duplicate, self.index)
+
+
+def _navigation_entry(mapping: Mapping[str, Any], collection_path: PropertyPath, index: int) -> Mapping[str, Any] | None:
+    collection = _collection_at(mapping, collection_path)
+    if not isinstance(collection, list) or not 0 <= index < len(collection):
+        return None
+    value = collection[index]
+    return value if isinstance(value, Mapping) else None
+
+
+class InsertNavigationEntryCommand(StructuralEditCommand):
+    """Insert one exploration scene link while retaining its authored shape."""
+
+    operation = "insert_navigation_entry"
+
+    def __init__(
+        self,
+        selection: DefinitionSelection,
+        collection_path: Sequence[str | int],
+        entry: Mapping[str, Any],
+        *,
+        index: int | None = None,
+    ) -> None:
+        super().__init__(selection, collection_path)
+        self.entry = _copy(dict(entry))
+        self.index = index
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        destination = self.entry.get("scene")
+        if not isinstance(destination, str) or not destination:
+            raise ValueError("A navigation entry requires a non-empty scene destination")
+        position = _insert_collection_value(working_copy.mapping, self.collection_path, self.entry, self.index)
+        self.index = position
+
+
+class RemoveNavigationEntryCommand(StructuralEditCommand):
+    """Remove one navigation entry and restore its exact list position on undo."""
+
+    operation = "remove_navigation_entry"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int], index: int) -> None:
+        super().__init__(selection, collection_path)
+        self.index = int(index)
+        self.removed_entry: Any = MISSING
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        collection = _collection_at(working_copy.mapping, self.collection_path)
+        if not isinstance(collection, list) or not 0 <= self.index < len(collection):
+            raise KeyError(f"Navigation entry {self.index} was not found at {self.collection_path!r}")
+        self.removed_entry = _copy(collection.pop(self.index))
+
+
+class SetNavigationDestinationCommand(EditCommand):
+    """Change only ``scene`` on one link, preserving all sibling fields."""
+
+    operation = "set_navigation_destination"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int], index: int, destination: str) -> None:
+        super().__init__(selection, tuple(collection_path) + (int(index), "scene"))
+        self.collection_path = tuple(collection_path)
+        self.index = int(index)
+        self.destination = str(destination)
+        self.value = self.destination
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        if not self.destination.strip():
+            return ValidationResult.error("Destination scene ID cannot be empty.")
+        if _navigation_entry(model.mapping, self.collection_path, self.index) is None:
+            return ValidationResult.error("The selected navigation entry no longer exists.")
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        entry = _navigation_entry(working_copy.mapping, self.collection_path, self.index)
+        if entry is None:
+            raise KeyError(f"Navigation entry {self.index} was not found")
+        target = _get_path(working_copy.mapping, self.collection_path + (self.index,))
+        if not isinstance(target, dict):
+            raise TypeError("Navigation entries must be mappings")
+        target["scene"] = self.destination
+
+
+class SetNavigationConditionCommand(EditCommand):
+    """Author, replace, or remove a condition without rewriting its dialect."""
+
+    operation = "set_navigation_condition"
+
+    def __init__(
+        self,
+        selection: DefinitionSelection,
+        collection_path: Sequence[str | int],
+        index: int,
+        condition: Any = MISSING,
+    ) -> None:
+        super().__init__(selection, tuple(collection_path) + (int(index),))
+        self.collection_path = tuple(collection_path)
+        self.index = int(index)
+        self.condition = _copy(condition)
+        self.value = self.condition
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        if _navigation_entry(model.mapping, self.collection_path, self.index) is None:
+            return ValidationResult.error("The selected navigation entry no longer exists.")
+        if self.condition is MISSING:
+            return ValidationResult.ok()
+        try:
+            parse_condition(self.condition)
+        except (ConditionError, TypeError, ValueError) as exc:
+            return ValidationResult.error(str(exc))
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        target = _get_path(working_copy.mapping, self.collection_path + (self.index,))
+        if not isinstance(target, dict):
+            raise TypeError("Navigation entries must be mappings")
+        if self.condition is MISSING:
+            target.pop("conditions", None)
+            target.pop("condition", None)
+            return
+        key = "conditions" if "conditions" in target else ("condition" if "condition" in target else "conditions")
+        target[key] = _copy(self.condition)
+
+
+# Friendly names for callers that describe the action rather than the
+# collection mutation.  They intentionally share the same command classes.
+AddSceneElementCommand = InsertSceneElementCommand
+DeleteSceneElementCommand = RemoveSceneElementCommand
+
+
+def _valid_geometry_point(value: Any) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 2
+        and all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+    )
+
+
+def _valid_geometry_rect(value: Any) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 4
+        and all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+        and value[2] > 0
+        and value[3] > 0
+    )
+
+
 __all__ = [
     "DefinitionWorkingCopy",
     "EditCommand",
     "EditValidationError",
+    "StructuralEditCommand",
+    "InsertSceneElementCommand",
+    "RemoveSceneElementCommand",
+    "DuplicateSceneElementCommand",
+    "InsertNavigationEntryCommand",
+    "RemoveNavigationEntryCommand",
+    "SetNavigationDestinationCommand",
+    "SetNavigationConditionCommand",
+    "AddSceneElementCommand",
+    "DeleteSceneElementCommand",
+    "GeometryChange",
     "PropertyDescriptor",
     "PropertyModel",
     "PropertyPath",
     "RemovePropertyCommand",
     "SetPropertyCommand",
+    "SetGeometryCommand",
     "ValidationResult",
 ]

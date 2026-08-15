@@ -45,12 +45,19 @@ class MainWindow(QMainWindow):
 
         self.browser = ProjectBrowser()
         self.inspector = InspectorWidget(self.session)
-        self.workspace = WorkspaceWidget()
+        self.workspace = WorkspaceWidget(self.session)
         self.diagnostics = DiagnosticsWidget()
         self.setCentralWidget(self.workspace)
         self._create_docks()
         self._create_menus()
         self.browser.selection_changed.connect(self._on_browser_selection)
+        self.workspace.scene_element_selected.connect(self._on_scene_element_selection)
+        self.workspace.scene_editor.geometry_committed.connect(lambda _ref: self._refresh_views())
+        self.workspace.scene_editor.structure_changed.connect(lambda _ref: self._refresh_views())
+        self.workspace.scene_editor.navigation_changed.connect(lambda _ref: self._refresh_views())
+        self.workspace.scene_editor.open_destination_scene.connect(self._open_destination_scene)
+        self.workspace.scene_editor.geometry_error.connect(self.statusBar().showMessage)
+        self.inspector.scene_geometry_edited.connect(self._on_scene_geometry_edit)
         self.inspector.state_changed.connect(self._on_inspector_state_changed)
         self._restore_window_state()
         self._refresh_views()
@@ -123,6 +130,12 @@ class MainWindow(QMainWindow):
         validate_action = QAction("Validate Story", self)
         validate_action.triggered.connect(self.validate_story)
         story_menu.addAction(validate_action)
+        scene_menu = self.menuBar().addMenu("Scene")
+        scene_menu.addAction(self.workspace.scene_editor.add_object_action)
+        scene_menu.addAction(self.workspace.scene_editor.add_look_region_action)
+        scene_menu.addSeparator()
+        scene_menu.addAction(self.workspace.scene_editor.duplicate_action)
+        scene_menu.addAction(self.workspace.scene_editor.delete_action)
         self.menuBar().addMenu("Test")
         help_menu = self.menuBar().addMenu("Help")
         about_action = QAction("About Story Designer", self)
@@ -304,6 +317,49 @@ class MainWindow(QMainWindow):
         self.session.select(selection)
         self._refresh_views()
 
+    def _open_destination_scene(self, scene_id: str) -> None:
+        project = self.session.project
+        if project is None or project.index is None:
+            return
+        entry = project.index.entry("scene", scene_id)
+        if entry is None:
+            return
+        self.session.select(DefinitionSelection("scene", scene_id, entry.source))
+        self._refresh_views()
+        self.statusBar().showMessage(f"Opened destination scene {scene_id}")
+
+    def _on_scene_element_selection(self, selection: object) -> None:
+        """Keep graphical scene-local identity visible in the Inspector."""
+
+        if selection is None:
+            self.inspector.clear_scene_element()
+            return
+        editor = self.workspace.scene_editor
+        if editor.presentation is None:
+            return
+        ref = selection
+        item = editor._item_for_ref(ref) if hasattr(ref, "kind") else None
+        if item is None:
+            return
+        element_data = {"id": ref.id, "kind": ref.kind}
+        if ref.kind == "object":
+            for value in editor.presentation.objects:
+                if value.id == ref.id:
+                    element_data.update(value.authored)
+                    break
+        elif ref.kind == "look_region":
+            for value in editor.presentation.look_regions:
+                if value.id == ref.id:
+                    element_data.update(value.authored)
+                    break
+        self.inspector.set_scene_element(ref, element_data)
+
+    def _on_scene_geometry_edit(self, selection: object, geometry: object) -> None:
+        editor = self.workspace.scene_editor
+        if not hasattr(selection, "scene_id") or not isinstance(geometry, tuple):
+            return
+        editor.commit_geometry(selection, geometry)
+
     def _on_inspector_state_changed(self) -> None:
         """Refresh shell chrome without rebuilding the active editor form."""
 
@@ -327,6 +383,9 @@ class MainWindow(QMainWindow):
             self.browser.select(selection)
         self.inspector.set_selection(project, selection, definition, self.session.diagnostics)
         self.workspace.set_state(project, selection, definition, self.session.diagnostics)
+        active_scene_element = self.workspace.scene_editor.selected_element
+        if active_scene_element is not None:
+            self._on_scene_element_selection(active_scene_element)
         self.diagnostics.set_diagnostics(self.session.diagnostics)
         self._update_status()
         self._update_action_state()

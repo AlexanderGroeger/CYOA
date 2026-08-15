@@ -4,6 +4,8 @@ from .diagnostics import DiagnosticsWidget
 from .inspector import InspectorWidget
 from .project_browser import ProjectBrowser
 from .property_editors import AssetPathEditor, PropertyEditorFactory, ReferenceComboBox
+from .scene_editor import ResizeHandleItem, SceneCanvasView, SceneEditorWidget, SceneGraphicsItem
+from .navigation_panel import NavigationPanel
 from .workspace import WorkspaceWidget
 
 __all__ = [
@@ -13,5 +15,10 @@ __all__ = [
     "ProjectBrowser",
     "PropertyEditorFactory",
     "ReferenceComboBox",
+    "SceneCanvasView",
+    "SceneEditorWidget",
+    "SceneGraphicsItem",
+    "ResizeHandleItem",
+    "NavigationPanel",
     "WorkspaceWidget",
 ]

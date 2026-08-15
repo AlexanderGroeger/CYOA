@@ -4,18 +4,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QLabel, QPlainTextEdit, QTabWidget, QVBoxLayout, QWidget
 
-from engine.story_core import Diagnostics, StoryProject
+from engine.story_core import ContentKind, Diagnostics, StoryProject
 
-from ..models import DefinitionSelection
+from ..models import DefinitionSelection, ProjectSession
+from .scene_editor import SceneEditorWidget
 
 
 class WorkspaceWidget(QWidget):
-    """A tab-based center area with a read-only overview for this phase."""
+    """Central overview plus the graphical editor for authored scenes."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    scene_element_selected = Signal(object)
+
+    def __init__(self, session: ProjectSession | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.session = session
         self.tabs = QTabWidget()
         self.overview_title = QLabel("Welcome to Story Designer")
         self.overview_title.setStyleSheet("font-size: 18px; font-weight: bold;")
@@ -26,6 +31,9 @@ class WorkspaceWidget(QWidget):
         page_layout.addWidget(self.overview_title)
         page_layout.addWidget(self.overview)
         self.tabs.addTab(page, "Overview")
+        self.scene_editor = SceneEditorWidget(session)
+        self.tabs.addTab(self.scene_editor, "Scene Editor")
+        self.scene_editor.element_selected.connect(self.scene_element_selected)
         layout = QVBoxLayout(self)
         layout.addWidget(self.tabs)
         self.clear()
@@ -33,6 +41,8 @@ class WorkspaceWidget(QWidget):
     def clear(self) -> None:
         self.overview_title.setText("Welcome to Story Designer")
         self.overview.setPlainText("Open a story project to browse its authored content.")
+        self.tabs.setCurrentIndex(0)
+        self.scene_editor.clear()
 
     def set_state(
         self,
@@ -48,6 +58,14 @@ class WorkspaceWidget(QWidget):
             self.overview_title.setText(project.manifest.title or project.manifest.id)
             self.overview.setPlainText(_project_summary(project, diagnostics))
             return
+        if selection.kind is ContentKind.SCENE:
+            mapping = self.session.working_mapping(selection) if self.session is not None else None
+            if mapping is None and hasattr(definition, "to_mapping"):
+                mapping = definition.to_mapping()
+            self.scene_editor.set_scene(project, selection.id, mapping)
+            self.tabs.setCurrentWidget(self.scene_editor)
+            return
+        self.tabs.setCurrentIndex(0)
         self.overview_title.setText(f"{selection.kind.value.replace('_', ' ').title()}: {selection.id}")
         authored = getattr(definition, "authored", definition)
         self.overview.setPlainText(
