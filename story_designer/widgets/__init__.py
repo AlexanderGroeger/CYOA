@@ -6,6 +6,7 @@ from .project_browser import ProjectBrowser
 from .property_editors import AssetPathEditor, PropertyEditorFactory, ReferenceComboBox
 from .scene_editor import ResizeHandleItem, SceneCanvasView, SceneEditorWidget, SceneGraphicsItem
 from .navigation_panel import NavigationPanel
+from .dialogue_editor import DialogueEditorWidget
 from .workspace import WorkspaceWidget
 
 __all__ = [
@@ -20,5 +21,6 @@ __all__ = [
     "SceneGraphicsItem",
     "ResizeHandleItem",
     "NavigationPanel",
+    "DialogueEditorWidget",
     "WorkspaceWidget",
 ]

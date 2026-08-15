@@ -39,6 +39,131 @@ class ActionForm(str, Enum):
     TYPED = "typed"
 
 
+@dataclass(frozen=True)
+class ActionEditorField:
+    """Editor-facing metadata for one authored action parameter.
+
+    This is deliberately descriptive only.  Runtime validation and execution
+    remain in the exploration action adapter; the Designer uses this metadata
+    to choose a native control and to create the canonical typed shape.
+    """
+
+    key: str
+    display_name: str
+    kind: str = "string"
+    default: Any = ""
+    required: bool = False
+    reference_target: str | None = None
+    description: str = ""
+    options: tuple[Any, ...] = ()
+
+
+@dataclass(frozen=True)
+class ActionEditorSpec:
+    """Small, reusable action vocabulary shared by editor presentations."""
+
+    type: str
+    display_name: str
+    fields: tuple[ActionEditorField, ...] = ()
+    description: str = ""
+    scope: ActionScope = ActionScope.EXPLORATION
+
+    def minimal_mapping(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"type": self.type}
+        result.update({field.key: thaw_value(field.default) for field in self.fields})
+        return result
+
+
+_EXPLORATION_ACTION_EDITOR_SPECS: tuple[ActionEditorSpec, ...] = (
+    ActionEditorSpec("dialog", "Dialogue", (
+        ActionEditorField("text", "Text", "multiline", ""),
+    )),
+    ActionEditorSpec("sound", "Play Sound", (
+        ActionEditorField("file", "Sound file", "asset", ""),
+    )),
+    ActionEditorSpec("music", "Play Music", (
+        ActionEditorField("file", "Music file", "asset", ""),
+        ActionEditorField("stop", "Stop", "boolean", False),
+    )),
+    ActionEditorSpec("set_flag", "Set Flag", (
+        ActionEditorField("flag", "Flag", "string", "", True),
+        ActionEditorField("value", "Value", "boolean", True),
+    )),
+    ActionEditorSpec("clear_flag", "Clear Flag", (
+        ActionEditorField("flag", "Flag", "string", "", True),
+    )),
+    ActionEditorSpec("give_item", "Give Item", (
+        ActionEditorField("item", "Item", "reference", "", True, "item"),
+        ActionEditorField("quantity", "Quantity", "integer", 1),
+    )),
+    ActionEditorSpec("remove_item", "Remove Item", (
+        ActionEditorField("item", "Item", "reference", "", True, "item"),
+        ActionEditorField("quantity", "Quantity", "integer", 1),
+    )),
+    ActionEditorSpec("animation", "Play Animation", (
+        ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
+        ActionEditorField("animation", "Animation", "reference", "", True, "animation"),
+    )),
+    ActionEditorSpec("show_object", "Show Object", (
+        ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
+    )),
+    ActionEditorSpec("hide_object", "Hide Object", (
+        ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
+    )),
+    ActionEditorSpec("change_sprite", "Change Sprite", (
+        ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
+        ActionEditorField("sprite", "Sprite", "asset", ""),
+    )),
+    ActionEditorSpec("heal", "Heal", (
+        ActionEditorField("amount", "Amount", "integer", 0),
+    )),
+    ActionEditorSpec("damage", "Damage", (
+        ActionEditorField("amount", "Amount", "integer", 0),
+    )),
+    ActionEditorSpec("change_stat", "Change Stat", (
+        ActionEditorField("stat", "Stat", "string", "", True),
+        ActionEditorField("amount", "Amount", "integer", 0),
+    )),
+    ActionEditorSpec("wait", "Wait", (
+        ActionEditorField("seconds", "Seconds", "number", 0.0),
+    )),
+    ActionEditorSpec("scene_transition", "Go To Scene", (
+        ActionEditorField("scene", "Scene", "reference", "", True, "scene"),
+    )),
+    ActionEditorSpec("trigger_event", "Trigger Event", (
+        ActionEditorField("event", "Look Event", "string", "", True),
+    )),
+)
+
+_EXPLORATION_ACTION_EDITOR_BY_TYPE = {spec.type: spec for spec in _EXPLORATION_ACTION_EDITOR_SPECS}
+
+
+def action_editor_specs(scope: ActionScope | str = ActionScope.EXPLORATION) -> tuple[ActionEditorSpec, ...]:
+    """Return metadata for actions authorable in the selected scope."""
+
+    selected_scope = ActionScope(scope)
+    if selected_scope is ActionScope.EXPLORATION:
+        return _EXPLORATION_ACTION_EDITOR_SPECS
+    return ()
+
+
+def action_editor_spec(action_type: str, scope: ActionScope | str = ActionScope.EXPLORATION) -> ActionEditorSpec | None:
+    """Look up one editor spec without changing the authored action."""
+
+    if not isinstance(action_type, str) or not action_type:
+        return None
+    return next((spec for spec in action_editor_specs(scope) if spec.type == action_type), None)
+
+
+def minimal_authored_action(action_type: str, scope: ActionScope | str = ActionScope.EXPLORATION) -> dict[str, Any]:
+    """Create the canonical typed skeleton for a newly authored action."""
+
+    spec = action_editor_spec(action_type, scope)
+    if spec is None:
+        raise ActionError(f"Unsupported {ActionScope(scope).value} action type {action_type!r}")
+    return spec.minimal_mapping()
+
+
 _EXPLORATION_TYPED_ACTION_ALIASES = {
     "play_sfx": "sound",
     "play_sound": "sound",

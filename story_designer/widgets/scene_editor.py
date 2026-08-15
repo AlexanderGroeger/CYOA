@@ -234,6 +234,7 @@ class SceneEditorWidget(QWidget):
     structure_changed = Signal(object)
     navigation_changed = Signal(object)
     open_destination_scene = Signal(str)
+    open_dialogue_sequence = Signal(str)
 
     def __init__(self, session: ProjectSession | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -287,6 +288,8 @@ class SceneEditorWidget(QWidget):
         self.duplicate_button.clicked.connect(self.duplicate_selected)
         self.delete_button = QPushButton("Delete")
         self.delete_button.clicked.connect(self.delete_selected)
+        self.open_dialogue_button = QPushButton("Open Dialogue")
+        self.open_dialogue_button.clicked.connect(self.open_selected_dialogue)
         toolbar = QHBoxLayout()
         toolbar.addWidget(self.scene_title)
         toolbar.addStretch(1)
@@ -295,6 +298,7 @@ class SceneEditorWidget(QWidget):
         toolbar.addWidget(self.add_region_button)
         toolbar.addWidget(self.duplicate_button)
         toolbar.addWidget(self.delete_button)
+        toolbar.addWidget(self.open_dialogue_button)
         toolbar.addWidget(self.fit_button)
         toolbar.addWidget(self.actual_button)
         toolbar.addWidget(self.zoom_out_button)
@@ -507,6 +511,54 @@ class SceneEditorWidget(QWidget):
         self.add_region_button.setEnabled(bool(has_scene))
         self.duplicate_button.setEnabled(bool(editable))
         self.delete_button.setEnabled(bool(editable))
+        self.open_dialogue_button.setEnabled(self._dialogue_reference_for_selected() is not None)
+
+    def open_selected_dialogue(self) -> bool:
+        reference = self._dialogue_reference_for_selected()
+        if reference is None:
+            return False
+        self.open_dialogue_sequence.emit(reference)
+        return True
+
+    def _dialogue_reference_for_selected(self) -> str | None:
+        ref = self.selected_element
+        if ref is None or ref.kind not in {"object", "look_region"} or self.session is None or self.presentation is None:
+            return None
+        selection = self._scene_definition_selection(self.presentation.scene_id)
+        mapping = self.session.working_mapping(selection) or {}
+        sources = [mapping]
+        exploration = mapping.get("exploration")
+        if isinstance(exploration, Mapping):
+            sources.insert(0, exploration)
+        event_id = None
+        key = "objects" if ref.kind == "object" else "look_regions"
+        for source in sources:
+            collection = source.get(key)
+            values = collection if isinstance(collection, list) else list(collection.values()) if isinstance(collection, Mapping) else []
+            for value in values:
+                if isinstance(value, Mapping) and value.get("id") == ref.id:
+                    look = value.get("look") if ref.kind == "object" else value
+                    if isinstance(look, Mapping) and isinstance(look.get("event"), str):
+                        event_id = look["event"]
+                        break
+            if event_id is not None:
+                break
+        if event_id is None:
+            return None
+        events = next((source.get("look_events") for source in sources if isinstance(source.get("look_events"), Mapping)), None)
+        event = events.get(event_id) if isinstance(events, Mapping) else None
+        actions = event.get("actions") if isinstance(event, Mapping) else None
+        if not isinstance(actions, list):
+            return None
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            if action.get("type") == "dialog":
+                value = action.get("dialog", action.get("sequence"))
+                return value if isinstance(value, str) else None
+            if "dialog" in action and isinstance(action.get("dialog"), str):
+                return action["dialog"]
+        return None
 
     def _structural_context(self) -> tuple[DefinitionSelection, dict[str, Any]] | None:
         if self.session is None or self.session.project is None or self.presentation is None:

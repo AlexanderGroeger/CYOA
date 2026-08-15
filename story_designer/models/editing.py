@@ -13,7 +13,15 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
-from engine.story_core import Schema, StoryProject, TypeSpec
+from engine.story_core import (
+    ActionError,
+    ActionScope,
+    Schema,
+    StoryProject,
+    TypeSpec,
+    action_editor_spec,
+    parse_action,
+)
 from engine.story_core.conditions import ConditionError, parse_condition
 from engine.story_core.schema import FieldSpec, MISSING
 
@@ -1016,6 +1024,489 @@ class SetNavigationConditionCommand(EditCommand):
         target[key] = _copy(self.condition)
 
 
+class SetDialogueTextCommand(EditCommand):
+    """Commit one completed dialogue text editing session."""
+
+    operation = "set_dialogue_text"
+
+    def __init__(self, selection: DefinitionSelection, text_path: Sequence[str | int], text: str) -> None:
+        super().__init__(selection, text_path)
+        self.text = str(text)
+        self.value = self.text
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        current = _collection_at(model.mapping, self.path)
+        if current is MISSING:
+            return ValidationResult.error("The selected dialogue entry no longer exists.")
+        if not isinstance(current, str):
+            return ValidationResult.error("Only authored string dialogue text can be edited here.")
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        self.old_authored_value = _copy(_collection_at(working_copy.mapping, self.path))
+        _set_path(working_copy.mapping, self.path, self.text)
+
+
+class SetDialogueConditionCommand(EditCommand):
+    """Author, replace, or remove a scene-entry condition without rewriting its dialect."""
+
+    operation = "set_dialogue_condition"
+
+    def __init__(self, selection: DefinitionSelection, entry_path: Sequence[str | int], condition: Any = MISSING) -> None:
+        super().__init__(selection, entry_path)
+        self.entry_path = tuple(entry_path)
+        self.condition = _copy(condition)
+        self.value = self.condition
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        entry = _collection_at(model.mapping, self.entry_path)
+        if not isinstance(entry, Mapping):
+            return ValidationResult.error("The selected dialogue entry has no editable metadata.")
+        if self.condition is MISSING:
+            return ValidationResult.ok()
+        try:
+            parse_condition(self.condition)
+        except (ConditionError, TypeError, ValueError) as exc:
+            return ValidationResult.error(str(exc))
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        entry = _collection_at(working_copy.mapping, self.entry_path)
+        if not isinstance(entry, dict):
+            raise TypeError("Dialogue entries must be mappings")
+        if self.condition is MISSING:
+            entry.pop("conditions", None)
+            entry.pop("condition", None)
+            return
+        key = "conditions" if "conditions" in entry else ("condition" if "condition" in entry else "conditions")
+        entry[key] = _copy(self.condition)
+
+
+class SetDialogueMetadataCommand(EditCommand):
+    """Set one small authored metadata field while preserving all siblings."""
+
+    operation = "set_dialogue_metadata"
+
+    def __init__(self, selection: DefinitionSelection, entry_path: Sequence[str | int], key: str, value: Any) -> None:
+        super().__init__(selection, tuple(entry_path) + (str(key),))
+        self.entry_path = tuple(entry_path)
+        self.key = str(key)
+        self.value = _copy(value)
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        return ValidationResult.ok() if isinstance(_collection_at(model.mapping, self.entry_path), Mapping) else ValidationResult.error(
+            "The selected dialogue entry has no editable metadata."
+        )
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        entry = _collection_at(working_copy.mapping, self.entry_path)
+        if not isinstance(entry, dict):
+            raise TypeError("Dialogue entries must be mappings")
+        entry[self.key] = _copy(self.value)
+
+
+class DialogueStructuralEditCommand(StructuralEditCommand):
+    """Base for list-backed dialogue entry operations."""
+
+    operation = "dialogue_structural_edit"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int]) -> None:
+        super().__init__(selection, collection_path)
+
+    def _dialogue_list(self, mapping: dict[str, Any], *, create: bool = False) -> list[Any]:
+        collection = _collection_at(mapping, self.collection_path)
+        if collection is MISSING and create:
+            parent, key = _ensure_collection_parent(mapping, self.collection_path)
+            parent[key] = []
+            collection = parent[key]
+        if not isinstance(collection, list):
+            raise TypeError("Dialogue entry operations require a list-backed dialogue collection")
+        return collection
+
+
+class InsertDialogueEntryCommand(DialogueStructuralEditCommand):
+    operation = "insert_dialogue_entry"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int], entry: Any, *, index: int | None = None) -> None:
+        super().__init__(selection, collection_path)
+        self.entry = _copy(entry)
+        self.index = index
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        entries = self._dialogue_list(working_copy.mapping, create=True)
+        self.index = len(entries) if self.index is None else max(0, min(int(self.index), len(entries)))
+        entries.insert(self.index, _copy(self.entry))
+
+
+class RemoveDialogueEntryCommand(DialogueStructuralEditCommand):
+    operation = "remove_dialogue_entry"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int], index: int) -> None:
+        super().__init__(selection, collection_path)
+        self.index = int(index)
+        self.removed_entry: Any = MISSING
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        entries = self._dialogue_list(working_copy.mapping)
+        if not 0 <= self.index < len(entries):
+            raise KeyError(f"Dialogue entry {self.index} was not found at {self.collection_path!r}")
+        self.removed_entry = _copy(entries.pop(self.index))
+
+
+class DuplicateDialogueEntryCommand(DialogueStructuralEditCommand):
+    operation = "duplicate_dialogue_entry"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int], index: int) -> None:
+        super().__init__(selection, collection_path)
+        self.index = int(index)
+        self.duplicate_index: int | None = None
+        self.duplicate_entry: Any = MISSING
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        entries = self._dialogue_list(working_copy.mapping)
+        if not 0 <= self.index < len(entries):
+            raise KeyError(f"Dialogue entry {self.index} was not found at {self.collection_path!r}")
+        self.duplicate_index = self.index + 1
+        self.duplicate_entry = _copy(entries[self.index])
+        entries.insert(self.duplicate_index, _copy(self.duplicate_entry))
+
+
+class MoveDialogueEntryCommand(DialogueStructuralEditCommand):
+    operation = "move_dialogue_entry"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int], index: int, new_index: int) -> None:
+        super().__init__(selection, collection_path)
+        self.index = int(index)
+        self.new_index = int(new_index)
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        entries = self._dialogue_list(working_copy.mapping)
+        if not 0 <= self.index < len(entries):
+            raise KeyError(f"Dialogue entry {self.index} was not found at {self.collection_path!r}")
+        destination = max(0, min(self.new_index, len(entries) - 1))
+        value = entries.pop(self.index)
+        entries.insert(destination, value)
+        self.new_index = destination
+
+
+def _unique_dialogue_id(collection: Mapping[str, Any], base: str = "dialogue") -> str:
+    candidate = str(base).strip() or "dialogue"
+    if candidate not in collection:
+        return candidate
+    suffix = 2
+    while f"{candidate}_{suffix}" in collection:
+        suffix += 1
+    return f"{candidate}_{suffix}"
+
+
+def _named_sequence_collection(mapping: dict[str, Any], path: PropertyPath, *, create: bool = False) -> dict[str, Any]:
+    value = _collection_at(mapping, path)
+    if value is MISSING and create:
+        parent, key = _ensure_collection_parent(mapping, path)
+        parent[key] = {}
+        value = parent[key]
+    if not isinstance(value, dict):
+        raise TypeError("Named dialogue sequences require a mapping")
+    return value
+
+
+class DialogueSequenceStructuralEditCommand(StructuralEditCommand):
+    """Atomic mapping operations for named local dialogue sequences."""
+
+    operation = "dialogue_sequence_structural_edit"
+
+    def __init__(self, selection: DefinitionSelection, sequences_path: Sequence[str | int]) -> None:
+        super().__init__(selection, sequences_path)
+
+    def _sequences(self, mapping: dict[str, Any], *, create: bool = False) -> dict[str, Any]:
+        return _named_sequence_collection(mapping, self.collection_path, create=create)
+
+
+class InsertNamedDialogueSequenceCommand(DialogueSequenceStructuralEditCommand):
+    operation = "insert_named_dialogue_sequence"
+
+    def __init__(
+        self,
+        selection: DefinitionSelection,
+        sequences_path: Sequence[str | int],
+        sequence_id: str | None = None,
+        sequence: Any = None,
+    ) -> None:
+        super().__init__(selection, sequences_path)
+        self.sequence_id = str(sequence_id) if sequence_id is not None else None
+        self.sequence = _copy([] if sequence is None else sequence)
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        sequences = self._sequences(working_copy.mapping, create=True)
+        requested = self.sequence_id or "dialogue"
+        self.sequence_id = _unique_dialogue_id(sequences, requested)
+        sequences[self.sequence_id] = _copy(self.sequence)
+
+
+class DuplicateNamedDialogueSequenceCommand(DialogueSequenceStructuralEditCommand):
+    operation = "duplicate_named_dialogue_sequence"
+
+    def __init__(
+        self,
+        selection: DefinitionSelection,
+        sequences_path: Sequence[str | int],
+        source_id: str,
+        duplicate_id: str | None = None,
+    ) -> None:
+        super().__init__(selection, sequences_path)
+        self.source_id = str(source_id)
+        self.duplicate_id = str(duplicate_id) if duplicate_id is not None else None
+        self.duplicate_sequence: Any = MISSING
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        sequences = self._sequences(working_copy.mapping)
+        if self.source_id not in sequences:
+            raise KeyError(f"Named dialogue sequence {self.source_id!r} was not found")
+        requested = self.duplicate_id or f"{self.source_id}_copy"
+        self.duplicate_id = _unique_dialogue_id(sequences, requested)
+        self.duplicate_sequence = _copy(sequences[self.source_id])
+        sequences[self.duplicate_id] = _copy(self.duplicate_sequence)
+
+
+class RemoveNamedDialogueSequenceCommand(DialogueSequenceStructuralEditCommand):
+    operation = "remove_named_dialogue_sequence"
+
+    def __init__(self, selection: DefinitionSelection, sequences_path: Sequence[str | int], sequence_id: str) -> None:
+        super().__init__(selection, sequences_path)
+        self.sequence_id = str(sequence_id)
+        self.removed_sequence: Any = MISSING
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        sequences = _collection_at(model.mapping, self.collection_path)
+        if not isinstance(sequences, Mapping) or self.sequence_id not in sequences:
+            return ValidationResult.error(f"Named dialogue sequence {self.sequence_id!r} was not found.")
+        from .dialogue_presentation import dialogue_sequence_references
+        references = dialogue_sequence_references(model.mapping, self.sequence_id)
+        if references:
+            return ValidationResult.error(
+                f"Cannot delete referenced dialogue sequence {self.sequence_id!r}: "
+                + ", ".join(references)
+            )
+        return ValidationResult.ok()
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        sequences = self._sequences(working_copy.mapping)
+        if self.sequence_id not in sequences:
+            raise KeyError(f"Named dialogue sequence {self.sequence_id!r} was not found")
+        self.removed_sequence = _copy(sequences.pop(self.sequence_id))
+
+
+class RenameNamedDialogueSequenceCommand(DialogueSequenceStructuralEditCommand):
+    """Rename a local sequence and update the known local reference sites atomically."""
+
+    operation = "rename_named_dialogue_sequence"
+
+    def __init__(self, selection: DefinitionSelection, sequences_path: Sequence[str | int], old_id: str, new_id: str) -> None:
+        super().__init__(selection, sequences_path)
+        self.old_id = str(old_id)
+        self.new_id = str(new_id).strip()
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        sequences = _collection_at(model.mapping, self.collection_path)
+        if not isinstance(sequences, Mapping) or self.old_id not in sequences:
+            return ValidationResult.error(f"Named dialogue sequence {self.old_id!r} was not found.")
+        if not self.new_id:
+            return ValidationResult.error("A dialogue sequence ID cannot be empty.")
+        if self.new_id != self.old_id and self.new_id in sequences:
+            return ValidationResult.error(f"Named dialogue sequence {self.new_id!r} already exists.")
+        return ValidationResult.ok()
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        sequences = self._sequences(working_copy.mapping)
+        value = sequences.pop(self.old_id)
+        sequences[self.new_id] = value
+        _rewrite_known_dialogue_references(working_copy.mapping, self.old_id, self.new_id)
+
+
+def _rewrite_known_dialogue_references(mapping: dict[str, Any], old_id: str, new_id: str) -> None:
+    """Rewrite only fields owned by the exploration/dialogue dialect."""
+
+    config = mapping.get("exploration") if isinstance(mapping.get("exploration"), Mapping) else mapping
+    if not isinstance(config, dict):
+        return
+    entries = config.get("dialog")
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict):
+                for key in ("sequence", "dialog"):
+                    if entry.get(key) == old_id:
+                        entry[key] = new_id
+                for key in ("sequence", "dialog"):
+                    if isinstance(entry.get(key), dict):
+                        _rewrite_dialogue_reference_value(entry[key], old_id, new_id)
+    events = config.get("look_events")
+    if isinstance(events, dict):
+        for event in events.values():
+            if isinstance(event, dict):
+                _rewrite_dialogue_reference_value(event.get("actions"), old_id, new_id)
+    for namespace in ("objects", "look_regions"):
+        values = config.get(namespace)
+        if isinstance(values, list):
+            for value in values:
+                if isinstance(value, dict):
+                    _rewrite_dialogue_reference_value(value.get("look"), old_id, new_id)
+    sequences = config.get("dialogue_sequences")
+    if isinstance(sequences, dict):
+        for sequence in sequences.values():
+            if isinstance(sequence, dict):
+                _rewrite_dialogue_reference_value(sequence.get("actions"), old_id, new_id)
+
+
+def _rewrite_dialogue_reference_value(value: Any, old_id: str, new_id: str) -> None:
+    if isinstance(value, dict):
+        for key, child in list(value.items()):
+            if key in {"sequence", "dialog"} and child == old_id:
+                value[key] = new_id
+            else:
+                _rewrite_dialogue_reference_value(child, old_id, new_id)
+    elif isinstance(value, list):
+        for child in value:
+            _rewrite_dialogue_reference_value(child, old_id, new_id)
+
+
+class DialogueActionStructuralEditCommand(StructuralEditCommand):
+    """Atomic list operations which retain action dialects and sibling data."""
+
+    operation = "dialogue_action_structural_edit"
+
+    def __init__(self, selection: DefinitionSelection, actions_path: Sequence[str | int], *, scope: ActionScope | str = ActionScope.EXPLORATION) -> None:
+        super().__init__(selection, actions_path)
+        self.scope = ActionScope(scope)
+
+    def _actions(self, mapping: dict[str, Any], *, create: bool = False) -> list[Any]:
+        actions = _collection_at(mapping, self.collection_path)
+        if actions is MISSING and create:
+            parent, key = _ensure_collection_parent(mapping, self.collection_path)
+            parent[key] = []
+            actions = parent[key]
+        if not isinstance(actions, list):
+            raise TypeError("Dialogue actions require a list")
+        return actions
+
+
+class InsertDialogueActionCommand(DialogueActionStructuralEditCommand):
+    operation = "insert_dialogue_action"
+
+    def __init__(self, selection: DefinitionSelection, actions_path: Sequence[str | int], action: Mapping[str, Any], *, index: int | None = None, scope: ActionScope | str = ActionScope.EXPLORATION) -> None:
+        super().__init__(selection, actions_path, scope=scope)
+        self.action = _copy(dict(action))
+        self.index = index
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        actions = self._actions(working_copy.mapping, create=True)
+        self.index = len(actions) if self.index is None else max(0, min(int(self.index), len(actions)))
+        actions.insert(self.index, _copy(self.action))
+
+
+class RemoveDialogueActionCommand(DialogueActionStructuralEditCommand):
+    operation = "remove_dialogue_action"
+
+    def __init__(self, selection: DefinitionSelection, actions_path: Sequence[str | int], index: int, *, scope: ActionScope | str = ActionScope.EXPLORATION) -> None:
+        super().__init__(selection, actions_path, scope=scope)
+        self.index = int(index)
+        self.removed_action: Any = MISSING
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        actions = self._actions(working_copy.mapping)
+        if not 0 <= self.index < len(actions):
+            raise KeyError(f"Dialogue action {self.index} was not found at {self.collection_path!r}")
+        self.removed_action = _copy(actions.pop(self.index))
+
+
+class DuplicateDialogueActionCommand(DialogueActionStructuralEditCommand):
+    operation = "duplicate_dialogue_action"
+
+    def __init__(self, selection: DefinitionSelection, actions_path: Sequence[str | int], index: int, *, scope: ActionScope | str = ActionScope.EXPLORATION) -> None:
+        super().__init__(selection, actions_path, scope=scope)
+        self.index = int(index)
+        self.duplicate_index: int | None = None
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        actions = self._actions(working_copy.mapping)
+        if not 0 <= self.index < len(actions):
+            raise KeyError(f"Dialogue action {self.index} was not found at {self.collection_path!r}")
+        self.duplicate_index = self.index + 1
+        actions.insert(self.duplicate_index, _copy(actions[self.index]))
+
+
+class MoveDialogueActionCommand(DialogueActionStructuralEditCommand):
+    operation = "move_dialogue_action"
+
+    def __init__(self, selection: DefinitionSelection, actions_path: Sequence[str | int], index: int, new_index: int, *, scope: ActionScope | str = ActionScope.EXPLORATION) -> None:
+        super().__init__(selection, actions_path, scope=scope)
+        self.index = int(index)
+        self.new_index = int(new_index)
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        actions = self._actions(working_copy.mapping)
+        if not 0 <= self.index < len(actions):
+            raise KeyError(f"Dialogue action {self.index} was not found at {self.collection_path!r}")
+        destination = max(0, min(self.new_index, len(actions) - 1))
+        value = actions.pop(self.index)
+        actions.insert(destination, value)
+        self.new_index = destination
+
+
+class SetDialogueActionParameterCommand(EditCommand):
+    """Edit one typed action parameter while leaving unknown siblings intact."""
+
+    operation = "set_dialogue_action_parameter"
+
+    def __init__(self, selection: DefinitionSelection, action_path: Sequence[str | int], key: str, value: Any, *, scope: ActionScope | str = ActionScope.EXPLORATION) -> None:
+        super().__init__(selection, tuple(action_path) + (str(key),))
+        self.action_path = tuple(action_path)
+        self.key = str(key)
+        self.value = _copy(value)
+        self.scope = ActionScope(scope)
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        action = _collection_at(model.mapping, self.action_path)
+        if not isinstance(action, Mapping):
+            return ValidationResult.error("The selected dialogue action no longer exists.")
+        if "type" not in action:
+            return ValidationResult.error("Legacy action syntax is read-only; remove and add a typed action instead.")
+        action_type = action.get("type")
+        try:
+            adapted = parse_action(action, self.scope)
+        except (ActionError, TypeError, ValueError) as exc:
+            return ValidationResult.error(str(exc))
+        spec = action_editor_spec(adapted.action_type, self.scope) if isinstance(action_type, str) else None
+        if spec is None:
+            return ValidationResult.error(f"Action type {action_type!r} is not editor-supported.")
+        field = next((item for item in spec.fields if item.key == self.key), None)
+        if field is None:
+            return ValidationResult.error(f"Unknown action parameter {self.key!r}.")
+        if field.kind in {"string", "multiline", "asset", "reference"} and not isinstance(self.value, str):
+            return ValidationResult.error(f"{field.display_name} must be text.")
+        if field.kind == "boolean" and not isinstance(self.value, bool):
+            return ValidationResult.error(f"{field.display_name} must be true or false.")
+        if field.kind in {"integer", "number"} and (not isinstance(self.value, (int, float)) or isinstance(self.value, bool)):
+            return ValidationResult.error(f"{field.display_name} must be numeric.")
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        action = _collection_at(working_copy.mapping, self.action_path)
+        if not isinstance(action, dict):
+            raise TypeError("Dialogue actions must be mappings")
+        self.old_authored_value = _copy(action.get(self.key, MISSING))
+        action[self.key] = _copy(self.value)
+
+
+# Friendly aliases used by callers that prefer field terminology.
+SetDialogueActionFieldCommand = SetDialogueActionParameterCommand
+AddNamedDialogueSequenceCommand = InsertNamedDialogueSequenceCommand
+DeleteNamedDialogueSequenceCommand = RemoveNamedDialogueSequenceCommand
+
+
 # Friendly names for callers that describe the action rather than the
 # collection mutation.  They intentionally share the same command classes.
 AddSceneElementCommand = InsertSceneElementCommand
@@ -1052,6 +1543,28 @@ __all__ = [
     "RemoveNavigationEntryCommand",
     "SetNavigationDestinationCommand",
     "SetNavigationConditionCommand",
+    "SetDialogueTextCommand",
+    "SetDialogueConditionCommand",
+    "SetDialogueMetadataCommand",
+    "DialogueStructuralEditCommand",
+    "InsertDialogueEntryCommand",
+    "RemoveDialogueEntryCommand",
+    "DuplicateDialogueEntryCommand",
+    "MoveDialogueEntryCommand",
+    "DialogueSequenceStructuralEditCommand",
+    "InsertNamedDialogueSequenceCommand",
+    "AddNamedDialogueSequenceCommand",
+    "DuplicateNamedDialogueSequenceCommand",
+    "RemoveNamedDialogueSequenceCommand",
+    "DeleteNamedDialogueSequenceCommand",
+    "RenameNamedDialogueSequenceCommand",
+    "DialogueActionStructuralEditCommand",
+    "InsertDialogueActionCommand",
+    "RemoveDialogueActionCommand",
+    "DuplicateDialogueActionCommand",
+    "MoveDialogueActionCommand",
+    "SetDialogueActionParameterCommand",
+    "SetDialogueActionFieldCommand",
     "AddSceneElementCommand",
     "DeleteSceneElementCommand",
     "GeometryChange",

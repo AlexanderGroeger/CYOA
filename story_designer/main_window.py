@@ -56,6 +56,8 @@ class MainWindow(QMainWindow):
         self.workspace.scene_editor.structure_changed.connect(lambda _ref: self._refresh_views())
         self.workspace.scene_editor.navigation_changed.connect(lambda _ref: self._refresh_views())
         self.workspace.scene_editor.open_destination_scene.connect(self._open_destination_scene)
+        self.workspace.dialogue_changed.connect(lambda _ref: self._refresh_views())
+        self.workspace.dialogue_entry_selected.connect(lambda _ref: self.inspector.clear_scene_element())
         self.workspace.scene_editor.geometry_error.connect(self.statusBar().showMessage)
         self.inspector.scene_geometry_edited.connect(self._on_scene_geometry_edit)
         self.inspector.state_changed.connect(self._on_inspector_state_changed)

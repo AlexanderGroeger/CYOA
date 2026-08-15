@@ -11,12 +11,15 @@ from engine.story_core import ContentKind, Diagnostics, StoryProject
 
 from ..models import DefinitionSelection, ProjectSession
 from .scene_editor import SceneEditorWidget
+from .dialogue_editor import DialogueEditorWidget
 
 
 class WorkspaceWidget(QWidget):
     """Central overview plus the graphical editor for authored scenes."""
 
     scene_element_selected = Signal(object)
+    dialogue_entry_selected = Signal(object)
+    dialogue_changed = Signal(object)
 
     def __init__(self, session: ProjectSession | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -32,8 +35,13 @@ class WorkspaceWidget(QWidget):
         page_layout.addWidget(self.overview)
         self.tabs.addTab(page, "Overview")
         self.scene_editor = SceneEditorWidget(session)
-        self.tabs.addTab(self.scene_editor, "Scene Editor")
+        self.tabs.addTab(self.scene_editor, "Scene")
         self.scene_editor.element_selected.connect(self.scene_element_selected)
+        self.dialogue_editor = DialogueEditorWidget(session)
+        self.tabs.addTab(self.dialogue_editor, "Dialogue")
+        self.dialogue_editor.entry_selected.connect(self.dialogue_entry_selected)
+        self.dialogue_editor.dialogue_changed.connect(self.dialogue_changed)
+        self.scene_editor.open_dialogue_sequence.connect(self.open_dialogue_sequence)
         layout = QVBoxLayout(self)
         layout.addWidget(self.tabs)
         self.clear()
@@ -43,6 +51,7 @@ class WorkspaceWidget(QWidget):
         self.overview.setPlainText("Open a story project to browse its authored content.")
         self.tabs.setCurrentIndex(0)
         self.scene_editor.clear()
+        self.dialogue_editor.clear()
 
     def set_state(
         self,
@@ -63,9 +72,11 @@ class WorkspaceWidget(QWidget):
             if mapping is None and hasattr(definition, "to_mapping"):
                 mapping = definition.to_mapping()
             self.scene_editor.set_scene(project, selection.id, mapping)
+            self.dialogue_editor.set_scene(project, selection.id, mapping)
             self.tabs.setCurrentWidget(self.scene_editor)
             return
         self.tabs.setCurrentIndex(0)
+        self.dialogue_editor.clear()
         self.overview_title.setText(f"{selection.kind.value.replace('_', ' ').title()}: {selection.id}")
         authored = getattr(definition, "authored", definition)
         self.overview.setPlainText(
@@ -73,6 +84,12 @@ class WorkspaceWidget(QWidget):
             f"Authored fields: {len(authored) if hasattr(authored, '__len__') else 'n/a'}\n\n"
             "Edit supported properties in the Inspector. Changes are kept in memory until persistence is added."
         )
+
+    def open_dialogue_sequence(self, sequence_id: str) -> None:
+        """Switch from a scene element to its local dialogue sequence."""
+
+        if self.dialogue_editor.select_source(f"sequence:{sequence_id}"):
+            self.tabs.setCurrentWidget(self.dialogue_editor)
 
 
 def _project_summary(project: StoryProject, diagnostics: Diagnostics) -> str:

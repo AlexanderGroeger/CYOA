@@ -8,12 +8,17 @@ gameplay controllers.
 
 from .actions import (
     ActionError,
+    ActionEditorField,
+    ActionEditorSpec,
     ActionForm,
     ActionReferences,
     ActionScope,
     StoryAction,
     action_references,
+    action_editor_spec,
+    action_editor_specs,
     actions_references,
+    minimal_authored_action,
     parse_action,
     parse_actions,
 )
@@ -80,6 +85,8 @@ from .source import SourceDocument, StorySource, StorySourceError
 
 __all__ = [
     "ActionError",
+    "ActionEditorField",
+    "ActionEditorSpec",
     "ActionForm",
     "ActionReferences",
     "ActionScope",
@@ -112,6 +119,9 @@ __all__ = [
     "MoveReference",
     "parse_action",
     "parse_actions",
+    "action_editor_spec",
+    "action_editor_specs",
+    "minimal_authored_action",
     "parse_condition",
     "PlayerProfile",
     "ProjectIndex",
