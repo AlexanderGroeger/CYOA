@@ -56,6 +56,7 @@ class ActionEditorField:
     reference_target: str | None = None
     description: str = ""
     options: tuple[Any, ...] = ()
+    asset_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,10 +80,10 @@ _EXPLORATION_ACTION_EDITOR_SPECS: tuple[ActionEditorSpec, ...] = (
         ActionEditorField("text", "Text", "multiline", ""),
     )),
     ActionEditorSpec("sound", "Play Sound", (
-        ActionEditorField("file", "Sound file", "asset", ""),
+        ActionEditorField("file", "Sound file", "asset", "", asset_kind="sfx"),
     )),
     ActionEditorSpec("music", "Play Music", (
-        ActionEditorField("file", "Music file", "asset", ""),
+        ActionEditorField("file", "Music file", "asset", "", asset_kind="music"),
         ActionEditorField("stop", "Stop", "boolean", False),
     )),
     ActionEditorSpec("set_flag", "Set Flag", (
@@ -102,7 +103,7 @@ _EXPLORATION_ACTION_EDITOR_SPECS: tuple[ActionEditorSpec, ...] = (
     )),
     ActionEditorSpec("animation", "Play Animation", (
         ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
-        ActionEditorField("animation", "Animation", "reference", "", True, "animation"),
+        ActionEditorField("animation", "Animation", "reference", "", True, "animation", asset_kind="animation"),
     )),
     ActionEditorSpec("show_object", "Show Object", (
         ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
@@ -112,7 +113,7 @@ _EXPLORATION_ACTION_EDITOR_SPECS: tuple[ActionEditorSpec, ...] = (
     )),
     ActionEditorSpec("change_sprite", "Change Sprite", (
         ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
-        ActionEditorField("sprite", "Sprite", "asset", ""),
+        ActionEditorField("sprite", "Sprite", "asset", "", asset_kind="sprites"),
     )),
     ActionEditorSpec("heal", "Heal", (
         ActionEditorField("amount", "Amount", "integer", 0),

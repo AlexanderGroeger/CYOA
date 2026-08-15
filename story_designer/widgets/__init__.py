@@ -10,6 +10,7 @@ from .dialogue_editor import DialogueEditorWidget
 from .workspace import WorkspaceWidget
 from .test_state import TestStateDialog
 from .condition_editor import ConditionEditorWidget
+from .asset_browser import AssetBrowserDialog, AssetBrowserWidget
 
 __all__ = [
     "AssetPathEditor",
@@ -27,4 +28,6 @@ __all__ = [
     "WorkspaceWidget",
     "TestStateDialog",
     "ConditionEditorWidget",
+    "AssetBrowserDialog",
+    "AssetBrowserWidget",
 ]

@@ -1,6 +1,7 @@
 """Application state models used by the Story Designer."""
 
 from .project_session import DefinitionSelection, ProjectSession, normalize_story_root
+from .assets import AssetBrowserModel, AssetRecord
 from .scene_presentation import (
     LookRegionPresentation,
     NavigationEntrySelection,
@@ -47,6 +48,7 @@ from .editing import (
     SetNavigationDestinationCommand,
     SetNavigationConditionCommand,
     SetSceneElementConditionCommand,
+    SetSceneElementPropertyCommand,
     SetDialogueTextCommand,
     SetDialogueConditionCommand,
     SetDialogueMetadataCommand,
@@ -92,6 +94,8 @@ from .persistence import (
 
 __all__ = [
     "DefinitionSelection",
+    "AssetBrowserModel",
+    "AssetRecord",
     "DefinitionWorkingCopy",
     "EditCommand",
     "EditValidationError",
@@ -104,6 +108,7 @@ __all__ = [
     "SetNavigationDestinationCommand",
     "SetNavigationConditionCommand",
     "SetSceneElementConditionCommand",
+    "SetSceneElementPropertyCommand",
     "SetDialogueTextCommand",
     "SetDialogueConditionCommand",
     "SetDialogueMetadataCommand",

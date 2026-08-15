@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
@@ -124,28 +125,37 @@ class ReferenceComboBox(EnumEditor):
 
 
 class AssetPathEditor(_IntentMixin, QWidget):
-    """Portable text editor with a conservative standard file picker."""
+    """Portable asset editor with a Story/Core-backed picker."""
 
     def __init__(
         self,
         *,
         story_root: Path | None = None,
         asset_kind: str | None = None,
+        project: Any | None = None,
+        source: Any | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._init_intent()
         self.story_root = story_root
         self.asset_kind = asset_kind
+        self.project = project
+        self.source = source or getattr(project, "source", None)
         self.line_edit = QLineEdit(self)
         self.browse_button = QToolButton(self)
-        self.browse_button.setText("Browse…")
-        self.browse_button.setToolTip("Choose a story-relative asset when possible.")
+        self.browse_button.setText("Choose Asset…")
+        self.browse_button.setToolTip("Choose a known story or shared asset.")
         self.browse_button.clicked.connect(self._browse)
+        self.file_button = QToolButton(self)
+        self.file_button.setText("Files…")
+        self.file_button.setToolTip("Choose an existing file; external files cannot be authored until imported.")
+        self.file_button.clicked.connect(self._browse_files)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.line_edit, 1)
         layout.addWidget(self.browse_button)
+        layout.addWidget(self.file_button)
         self.line_edit.editingFinished.connect(lambda: self._emit_intent(self.line_edit.text()))
 
     def text(self) -> str:
@@ -155,21 +165,45 @@ class AssetPathEditor(_IntentMixin, QWidget):
         self.line_edit.setText(value)
 
     def _browse(self) -> None:
+        from ..asset_browser import AssetBrowserDialog
+
+        dialog = AssetBrowserDialog(
+            self.source or self.project,
+            expected_kind=self.asset_kind,
+            current_reference=self.text(),
+            parent=self,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted or not dialog.selected_reference:
+            return
+        self.line_edit.setText(dialog.selected_reference)
+        self._emit_intent(dialog.selected_reference)
+
+    def _browse_files(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(self, "Choose asset")
         if not selected:
             return
         candidate = Path(selected)
-        if self.story_root is None:
-            self.line_edit.setToolTip("Browse selection not converted; enter a portable authored path.")
+        source = self.source or getattr(self.project, "source", None)
+        if source is not None:
+            reference = source.authored_asset_reference(candidate, self.asset_kind)
+            if reference is None:
+                QMessageBox.warning(
+                    self,
+                    "External asset",
+                    "This file is outside the known story/shared asset roots.\n\n"
+                    "Copy or import it into a supported asset root before using it.",
+                )
+                return
+        elif self.story_root is None:
+            self.line_edit.setToolTip("No story source is loaded; enter a portable authored path.")
             return
-        try:
-            relative = candidate.resolve().relative_to(self.story_root.resolve())
-        except ValueError:
-            self.line_edit.setToolTip(
-                "Selected file is outside the story root; enter its portable authored path instead."
-            )
-            return
-        self.line_edit.setText(relative.as_posix())
+        else:
+            try:
+                reference = candidate.resolve().relative_to(self.story_root.resolve()).as_posix()
+            except ValueError:
+                QMessageBox.warning(self, "External asset", "External files must be copied/imported before use.")
+                return
+        self.line_edit.setText(reference)
         self._emit_intent(self.line_edit.text())
 
 
@@ -223,6 +257,8 @@ class PropertyEditorFactory:
             return AssetPathEditor(
                 story_root=story_root,
                 asset_kind=descriptor.asset_kind,
+                project=project,
+                source=getattr(project, "source", None),
                 parent=parent,
             )
         if kind == "condition":

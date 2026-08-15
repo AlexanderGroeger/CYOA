@@ -83,7 +83,7 @@ from .serialization import (
     serialize_project,
     write_serialized_project,
 )
-from .source import SourceDocument, StorySource, StorySourceError
+from .source import AssetRecord, SourceDocument, StorySource, StorySourceError
 
 
 __all__ = [
@@ -143,6 +143,7 @@ __all__ = [
     "serialize_definition",
     "serialize_project",
     "SourceDocument",
+    "AssetRecord",
     "StoryAction",
     "StoryCondition",
     "StoryCoreError",

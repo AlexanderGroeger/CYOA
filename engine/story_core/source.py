@@ -8,7 +8,7 @@ It has no rendering, audio, pygame, or UI dependencies.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -18,6 +18,31 @@ from .diagnostics import StorySourceError
 
 
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".gif"})
+
+
+@dataclass(frozen=True)
+class AssetRecord:
+    """A discoverable authored asset and its effective source.
+
+    ``reference`` is the value that can safely be written to story YAML.
+    ``resolved_path`` is deliberately separate: it is an inspection aid and
+    is never used as the authored value by the Designer.
+    """
+
+    reference: str
+    resolved_path: Path | None
+    source_kind: str
+    asset_kind: str
+    display_name: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def exists(self) -> bool:
+        return self.resolved_path is not None and self.resolved_path.exists()
+
+    @property
+    def is_image(self) -> bool:
+        return self.resolved_path is not None and self.resolved_path.suffix.lower() in IMAGE_EXTENSIONS
 
 
 @dataclass(frozen=True)
@@ -174,6 +199,118 @@ class StorySource:
                 return direct
         return self.resolve_asset_path(default_category, str(normalized))
 
+    def authored_asset_reference(self, path: str | Path, category: str | None = None) -> str | None:
+        """Return the portable authored reference for a known asset path.
+
+        Regular assets are category-relative because that is what
+        ``resolve_asset_path`` and the runtime loaders consume.  Animation
+        definitions use their ID (the directory below ``animations``).
+        ``None`` means the path is outside all supported asset roots.
+        """
+
+        target = Path(path).resolve()
+        category_name = _normalise_asset_category(category)
+        for root in (self.story_root / "assets", self.shared_assets_root):
+            try:
+                relative = target.relative_to(root.resolve())
+            except ValueError:
+                continue
+            parts = relative.parts
+            if len(parts) < 2:
+                continue
+            root_category = parts[0]
+            if root_category == "animations":
+                if target.name.lower() == "anim.yaml" and len(parts) >= 3:
+                    return Path(*parts[1:-1]).as_posix()
+                continue
+            if category_name is not None and _normalise_asset_category(root_category) != category_name:
+                continue
+            return Path(*parts[1:]).as_posix()
+        return None
+
+    # Friendly aliases for consumers that describe this operation as
+    # canonicalisation/reference generation.
+    canonical_asset_reference = authored_asset_reference
+    asset_reference_for_path = authored_asset_reference
+
+    def discover_assets(self) -> tuple[AssetRecord, ...]:
+        """Discover effective story/shared assets without loading media."""
+
+        records: list[AssetRecord] = []
+        seen: set[tuple[str, str]] = set()
+        for root, source_kind in ((self.story_root / "assets", "Story"), (self.shared_assets_root, "Shared")):
+            if not root.is_dir():
+                continue
+            for category_dir in sorted((item for item in root.iterdir() if item.is_dir()), key=lambda item: item.name.casefold()):
+                category = category_dir.name
+                if category == "animations":
+                    paths = sorted(
+                        (item for item in category_dir.rglob("anim.yaml") if item.is_file()),
+                        key=lambda item: item.as_posix().casefold(),
+                    )
+                    for path in paths:
+                        reference = self.authored_asset_reference(path, "animation")
+                        if not reference:
+                            continue
+                        key = ("animation", reference)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        frames = _animation_frame_metadata(path)
+                        records.append(AssetRecord(
+                            reference=reference,
+                            resolved_path=path,
+                            source_kind=source_kind,
+                            asset_kind="animation",
+                            display_name=reference,
+                            metadata=frames,
+                        ))
+                    continue
+                for path in sorted((item for item in category_dir.rglob("*") if item.is_file()), key=lambda item: item.as_posix().casefold()):
+                    reference = self.authored_asset_reference(path, category)
+                    if not reference:
+                        continue
+                    kind = _normalise_asset_category(category) or category
+                    key = (kind, reference)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    records.append(AssetRecord(
+                        reference=reference,
+                        resolved_path=path,
+                        source_kind=source_kind,
+                        asset_kind=kind,
+                        display_name=path.name,
+                    ))
+        return tuple(sorted(records, key=lambda item: (item.asset_kind.casefold(), item.reference.casefold(), item.source_kind.casefold())))
+
+    discover_asset_records = discover_assets
+
+    def asset_record_for_reference(self, reference: str, category: str | None = None) -> AssetRecord:
+        """Represent an authored reference, including unresolved references."""
+
+        expected = _normalise_asset_category(category) or "asset"
+        for record in self.discover_assets():
+            if record.reference == reference and (category is None or _asset_kinds_compatible(record.asset_kind, expected)):
+                return record
+        resolved: Path | None = None
+        try:
+            if expected == "animation":
+                resolved = self.animation_directory(reference)
+                if not (resolved / "anim.yaml").is_file():
+                    resolved = None
+            elif category:
+                resolved = self.resolve_asset_reference(reference, category)
+        except StorySourceError:
+            resolved = None
+        return AssetRecord(
+            reference=str(reference),
+            resolved_path=resolved,
+            source_kind="Story" if resolved is not None and _is_under(resolved, self.story_root) else "Shared" if resolved is not None else "Missing",
+            asset_kind=expected,
+            display_name=Path(str(reference)).name or str(reference),
+        )
+
     def load_animation(self, animation_name: str, *, isolated: bool = True) -> Any:
         """Load an animation YAML file using the runtime's fallback order."""
 
@@ -236,3 +373,33 @@ def _is_under(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _normalise_asset_category(category: str | None) -> str | None:
+    if category is None:
+        return None
+    value = str(category).strip().lower()
+    aliases = {"image": "image", "images": "image", "animation": "animation", "animations": "animation"}
+    return aliases.get(value, value)
+
+
+def _asset_kinds_compatible(actual: str, expected: str) -> bool:
+    if expected in {"asset", "", "all"}:
+        return True
+    if expected == "image":
+        return actual not in {"music", "sfx", "fonts", "font", "animation"}
+    if expected in {"audio", "sound"}:
+        return actual in {"music", "sfx"}
+    return actual == expected or actual.rstrip("s") == expected.rstrip("s")
+
+
+def _animation_frame_metadata(path: Path) -> Mapping[str, Any]:
+    """Read only lightweight animation metadata for browser details."""
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except (OSError, yaml.YAMLError):
+        return {"frame_count": 0}
+    frames = data.get("frames") if isinstance(data, Mapping) else None
+    return {"frame_count": len(frames) if isinstance(frames, list) else 0}

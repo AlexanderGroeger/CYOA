@@ -1093,6 +1093,39 @@ class SetSceneElementConditionCommand(EditCommand):
         target[key] = _copy(self.condition)
 
 
+class SetSceneElementPropertyCommand(EditCommand):
+    """Edit a portable field on a nested scene object/look-region."""
+
+    operation = "set_scene_element_property"
+
+    def __init__(self, selection: DefinitionSelection, element: Any, key: str, value: Any) -> None:
+        super().__init__(selection, ())
+        self.element = element
+        self.key = str(key)
+        self.value = _copy(value)
+        self.new_authored_value = _copy(value)
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        found = _scene_element_condition_location(model.mapping, self.element)
+        if found is None:
+            return ValidationResult.error("The selected scene element no longer exists.")
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        found = _scene_element_condition_location(working_copy.mapping, self.element)
+        if found is None:
+            raise KeyError("The selected scene element no longer exists")
+        _path, target = found
+        if not isinstance(target, dict):
+            raise TypeError("Scene elements must be mappings")
+        self.old_authored_value = _copy(target.get(self.key, MISSING))
+        if self.value is MISSING:
+            target.pop(self.key, None)
+        else:
+            target[self.key] = _copy(self.value)
+
+
 class SetDialogueTextCommand(EditCommand):
     """Commit one completed dialogue text editing session."""
 

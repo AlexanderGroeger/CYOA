@@ -59,6 +59,7 @@ from ..models import (
     present_dialogue_actions,
 )
 from .condition_editor import ConditionEditorWidget
+from .property_editors import AssetPathEditor
 
 
 class _CommitPlainTextEdit(QPlainTextEdit):
@@ -612,6 +613,16 @@ class DialogueEditorWidget(QWidget):
         self.action_status.clear()
 
     def _make_action_field(self, field, value: Any) -> QWidget:
+        if field.asset_kind:
+            widget = AssetPathEditor(
+                story_root=self.project.story_root if self.project is not None else None,
+                source=self.project.source if self.project is not None else None,
+                project=self.project,
+                asset_kind=field.asset_kind,
+            )
+            widget.setText("" if value is None else str(value))
+            widget.value_edited.connect(lambda edited, key=field.key: self._commit_action_field(key, edited))
+            return widget
         if field.kind == "boolean":
             widget = QCheckBox()
             widget.setChecked(bool(value))

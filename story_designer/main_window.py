@@ -31,7 +31,7 @@ from .models import (
     ProjectSession,
     normalize_story_root,
 )
-from .widgets import DiagnosticsWidget, InspectorWidget, ProjectBrowser, WorkspaceWidget
+from .widgets import AssetBrowserWidget, DiagnosticsWidget, InspectorWidget, ProjectBrowser, WorkspaceWidget
 from .widgets.test_state import TestStateDialog
 from .services.runtime_test import SceneTestConfiguration, SceneTestLaunch, resolve_scene_id
 from engine.core.developer_test import DeveloperTestConfigError
@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
         self._closing = False
 
         self.browser = ProjectBrowser()
+        self.asset_browser = AssetBrowserWidget()
         self.inspector = InspectorWidget(self.session)
         self.workspace = WorkspaceWidget(self.session)
         self.diagnostics = DiagnosticsWidget()
@@ -94,6 +95,12 @@ class MainWindow(QMainWindow):
         self.diagnostics_dock.setObjectName("DiagnosticsDock")
         self.diagnostics_dock.setWidget(self.diagnostics)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.diagnostics_dock)
+
+        self.assets_dock = QDockWidget("Assets", self)
+        self.assets_dock.setObjectName("AssetsDock")
+        self.assets_dock.setWidget(self.asset_browser)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.assets_dock)
+        self.tabifyDockWidget(self.diagnostics_dock, self.assets_dock)
 
     def _create_menus(self) -> None:
         file_menu = self.menuBar().addMenu("File")
@@ -142,6 +149,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.project_dock.toggleViewAction())
         view_menu.addAction(self.inspector_dock.toggleViewAction())
         view_menu.addAction(self.diagnostics_dock.toggleViewAction())
+        view_menu.addAction(self.assets_dock.toggleViewAction())
 
         story_menu = self.menuBar().addMenu("Story")
         validate_action = QAction("Validate Story", self)
@@ -645,6 +653,7 @@ class MainWindow(QMainWindow):
         selection = self.session.selection
         definition = self.session.definition()
         self.browser.set_project(project)
+        self.asset_browser.set_source(project.source if project is not None else None)
         if selection is not None:
             self.browser.select(selection)
         self.inspector.set_selection(project, selection, definition, self.session.diagnostics)

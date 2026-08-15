@@ -33,6 +33,7 @@ from ..models import (
     RemovePropertyCommand,
     SetPropertyCommand,
     SetSceneElementConditionCommand,
+    SetSceneElementPropertyCommand,
 )
 from .property_editors import AssetPathEditor, PropertyEditorFactory
 from .condition_editor import ConditionEditorWidget
@@ -69,6 +70,7 @@ class InspectorWidget(QWidget):
         self._rows: dict[tuple[str | int, ...], _PropertyRow] = {}
         self._object_groups: dict[str, QFormLayout] = {}
         self._scene_geometry_fields: dict[str, QSpinBox] = {}
+        self._scene_asset_fields: dict[str, AssetPathEditor] = {}
 
         self.header = QLabel("Inspector")
         self.header.setStyleSheet("font-size: 16px; font-weight: bold;")
@@ -153,6 +155,7 @@ class InspectorWidget(QWidget):
         self.scene_geometry_box.hide()
         self.scene_condition_box.hide()
         self._scene_geometry_fields.clear()
+        self._scene_asset_fields.clear()
         self._clear_form()
 
     def set_selection(
@@ -199,6 +202,7 @@ class InspectorWidget(QWidget):
         self._scene_element = selection
         self.property_scroll.setEnabled(True)
         self._build_scene_geometry(selection, authored)
+        self._build_scene_asset(selection, authored)
         kind = getattr(selection, "kind", "element").replace("_", " ").title()
         identifier = getattr(selection, "id", "")
         self.header.setText(f"Scene {kind}: {identifier}")
@@ -270,6 +274,35 @@ class InspectorWidget(QWidget):
             self.scene_geometry_form.addRow(name.title(), editor)
         self.scene_geometry_box.show()
 
+    def _build_scene_asset(self, selection: object, authored: Mapping[str, Any]) -> None:
+        self._scene_asset_fields.clear()
+        if getattr(selection, "kind", "") != "object":
+            return
+        editor = AssetPathEditor(
+            story_root=self._project.story_root if self._project is not None else None,
+            source=self._project.source if self._project is not None else None,
+            project=self._project,
+            asset_kind="sprites",
+            parent=self.scene_geometry_box,
+        )
+        editor.setText(str(authored.get("sprite", "")))
+        editor.value_edited.connect(lambda value, ref=selection: self._scene_asset_changed(ref, value))
+        self._scene_asset_fields["sprite"] = editor
+        self.scene_geometry_form.addRow("Sprite", editor)
+        self.scene_geometry_box.show()
+
+    def _scene_asset_changed(self, selection: object, value: Any) -> None:
+        if self.session is None or self._selection is None or selection is not self._scene_element:
+            return
+        try:
+            self.session.apply_command(SetSceneElementPropertyCommand(self._selection, selection, "sprite", value))
+        except EditValidationError as exc:
+            self._show_error((), exc.message)
+            return
+        self.summary.setPlainText(_compact_mapping(self._scene_element_mapping()))
+        self._update_header()
+        self.state_changed.emit()
+
     def _emit_scene_geometry(self, selection: object) -> None:
         if not self._scene_geometry_fields or selection is not self._scene_element:
             return
@@ -286,6 +319,7 @@ class InspectorWidget(QWidget):
         self.scene_geometry_box.hide()
         self.scene_condition_box.hide()
         self._scene_geometry_fields.clear()
+        self._scene_asset_fields.clear()
         if self._project is None or self._selection is None or self._definition is None:
             self.clear()
             return
