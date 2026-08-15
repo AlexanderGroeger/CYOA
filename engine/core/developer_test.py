@@ -23,6 +23,8 @@ class DeveloperTestConfigError(EngineError, ValueError):
 
 _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _ALLOWED_KEYS = frozenset({"scene", "scene_id", "flags", "variables", "inventory", "stats"})
+_BATTLE_ALLOWED_KEYS = _ALLOWED_KEYS | frozenset({"battle", "battle_id"})
+_QTE_ALLOWED_KEYS = frozenset({"qte_move", "move_id", "qte_level", "difficulty_level", "seed"})
 _JSON_SCALARS = (str, int, float, bool)
 
 
@@ -140,6 +142,123 @@ class SceneTestConfiguration:
             raise DeveloperTestConfigError(f"Could not write developer test configuration: {exc}") from exc
 
 
+@dataclass
+class BattleTestConfiguration(SceneTestConfiguration):
+    """Launch-time battle selection plus the normal fresh-state overrides.
+
+    Battle tests deliberately wrap the same flags, variables, inventory, and
+    numeric stats used by scene tests.  The battle identifier is transport
+    metadata only; it never becomes authored story data.
+    """
+
+    battle_id: str | None = None
+
+    def validate(self, *, known_items: Mapping[str, Any] | set[str] | None = None) -> None:
+        super().validate(known_items=known_items)
+        if self.scene_id is not None:
+            raise DeveloperTestConfigError("A battle test configuration cannot also specify a scene")
+        if self.battle_id is None or not isinstance(self.battle_id, str) or not self.battle_id:
+            raise DeveloperTestConfigError("battle_id must be a non-empty string")
+
+    def to_dict(self) -> dict[str, Any]:
+        result = super().to_dict()
+        result.pop("scene", None)
+        result["battle"] = self.battle_id
+        return result
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "BattleTestConfiguration":
+        if not isinstance(raw, Mapping):
+            raise DeveloperTestConfigError("Developer test configuration root must be an object")
+        unknown = set(raw) - _BATTLE_ALLOWED_KEYS
+        if unknown:
+            raise DeveloperTestConfigError(
+                f"Unknown developer test configuration field(s): {', '.join(sorted(map(str, unknown)))}"
+            )
+        battle_id = raw.get("battle", raw.get("battle_id"))
+        scene_id = raw.get("scene", raw.get("scene_id"))
+        return cls(
+            battle_id=battle_id,
+            scene_id=scene_id,
+            flags=_mapping(raw.get("flags", {}), "flags"),
+            variables=_mapping(raw.get("variables", {}), "variables"),
+            inventory=_mapping(raw.get("inventory", {}), "inventory"),
+            stats=_mapping(raw.get("stats", {}), "stats"),
+        )
+
+
+@dataclass(frozen=True)
+class QteTestConfiguration:
+    """Ephemeral configuration for one isolated global combat-move test."""
+
+    move_id: str
+    difficulty_level: int
+    seed: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.move_id, str) or not self.move_id:
+            raise DeveloperTestConfigError("move_id must be a non-empty string")
+        if isinstance(self.difficulty_level, bool) or not isinstance(self.difficulty_level, int) or self.difficulty_level < 0:
+            raise DeveloperTestConfigError("difficulty_level must be a non-negative integer")
+        if self.seed is not None and (isinstance(self.seed, bool) or not isinstance(self.seed, int)):
+            raise DeveloperTestConfigError("seed must be an integer when provided")
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"qte_move": self.move_id, "qte_level": self.difficulty_level}
+        if self.seed is not None:
+            result["seed"] = self.seed
+        return result
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "QteTestConfiguration":
+        if not isinstance(raw, Mapping):
+            raise DeveloperTestConfigError("QTE test configuration root must be an object")
+        unknown = set(raw) - _QTE_ALLOWED_KEYS
+        if unknown:
+            raise DeveloperTestConfigError(
+                f"Unknown QTE test configuration field(s): {', '.join(sorted(map(str, unknown)))}"
+            )
+        move_id = raw.get("qte_move", raw.get("move_id"))
+        level = raw.get("qte_level", raw.get("difficulty_level"))
+        return cls(move_id=move_id, difficulty_level=level, seed=raw.get("seed"))
+
+    @classmethod
+    def from_json(cls, path: str | Path) -> "QteTestConfiguration":
+        try:
+            with Path(path).open("r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+        except json.JSONDecodeError as exc:
+            raise DeveloperTestConfigError(f"Malformed developer test configuration JSON: {exc.msg}") from exc
+        except OSError as exc:
+            raise DeveloperTestConfigError(f"Could not read developer test configuration: {exc}") from exc
+        return cls.from_dict(raw)
+
+    def write_json(self, path: str | Path) -> None:
+        try:
+            with Path(path).open("w", encoding="utf-8") as handle:
+                json.dump(self.to_dict(), handle, ensure_ascii=False, indent=2, sort_keys=True)
+                handle.write("\n")
+        except OSError as exc:
+            raise DeveloperTestConfigError(f"Could not write developer test configuration: {exc}") from exc
+
+
+def load_developer_test_configuration(path: str | Path) -> SceneTestConfiguration | BattleTestConfiguration | QteTestConfiguration:
+    """Load either the established scene config or a battle config by shape."""
+
+    try:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise DeveloperTestConfigError(f"Malformed developer test configuration JSON: {exc.msg}") from exc
+    except OSError as exc:
+        raise DeveloperTestConfigError(f"Could not read developer test configuration: {exc}") from exc
+    if isinstance(raw, Mapping) and ("qte_move" in raw or "qte_level" in raw or "move_id" in raw and "difficulty_level" in raw):
+        return QteTestConfiguration.from_dict(raw)
+    if isinstance(raw, Mapping) and ("battle" in raw or "battle_id" in raw):
+        return BattleTestConfiguration.from_dict(raw)
+    return SceneTestConfiguration.from_dict(raw)
+
+
 def apply_developer_test_configuration(
     state: Any,
     configuration: SceneTestConfiguration,
@@ -162,4 +281,11 @@ def apply_developer_test_configuration(
         state.stats[name] = value
 
 
-__all__ = ["DeveloperTestConfigError", "SceneTestConfiguration", "apply_developer_test_configuration"]
+__all__ = [
+    "BattleTestConfiguration",
+    "DeveloperTestConfigError",
+    "QteTestConfiguration",
+    "SceneTestConfiguration",
+    "apply_developer_test_configuration",
+    "load_developer_test_configuration",
+]

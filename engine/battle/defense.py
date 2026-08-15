@@ -2600,3 +2600,15 @@ def validate_defense_sprites(sequence: Mapping[str, Any], sprite_exists: Callabl
             for index, child in enumerate(value):
                 visit(child, f"{current_path}[{index}]")
     visit(sequence, path)
+
+
+# Re-export authoring metadata from the runtime discovery module. The metadata
+# module imports this module only when its lookup function is called, so this
+# late import does not change runtime initialization.
+from .defense_metadata import (  # noqa: E402
+    DefensePatternEditorSpec,
+    DefensePatternFieldSpec,
+    defense_pattern_editor_spec,
+    defense_pattern_editor_specs,
+    minimal_defense_pattern,
+)

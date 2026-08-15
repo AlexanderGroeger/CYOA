@@ -34,8 +34,16 @@ from .models import (
 from .widgets import AssetBrowserWidget, DiagnosticsWidget, InspectorWidget, ProjectBrowser, WorkspaceWidget
 from .models import SceneGraphEdge
 from .widgets.test_state import TestStateDialog
-from .services.runtime_test import SceneTestConfiguration, SceneTestLaunch, resolve_scene_id
-from engine.core.developer_test import DeveloperTestConfigError
+from .services.runtime_test import (
+    BattleTestLaunch,
+    QteTestLaunch,
+    SceneTestConfiguration,
+    SceneTestLaunch,
+    resolve_battle_id,
+    resolve_qte_move_id,
+    resolve_scene_id,
+)
+from engine.core.developer_test import BattleTestConfiguration, DeveloperTestConfigError
 
 
 class MainWindow(QMainWindow):
@@ -49,6 +57,9 @@ class MainWindow(QMainWindow):
         self.session = ProjectSession()
         self.test_process: QProcess | None = None
         self._test_scene_id: str | None = None
+        self._test_battle_id: str | None = None
+        self._test_qte_move_id: str | None = None
+        self._test_qte_level: int | None = None
         self._test_output: list[str] = []
         self._test_error_reported = False
         self._test_configuration = SceneTestConfiguration()
@@ -78,6 +89,9 @@ class MainWindow(QMainWindow):
         self.workspace.graph_scene_selected.connect(self._on_graph_selection)
         self.workspace.graph_scene_open_requested.connect(self._open_graph_scene)
         self.workspace.graph_open_navigation.connect(self._open_graph_navigation)
+        self.workspace.battle_editor.test_requested.connect(self.test_current_battle)
+        self.workspace.combat_move_editor.test_requested.connect(self.test_current_move)
+        self.workspace.battle_editor.open_move_requested.connect(self._open_move_definition)
         self.workspace.scene_editor.geometry_error.connect(self.statusBar().showMessage)
         self.inspector.scene_geometry_edited.connect(self._on_scene_geometry_edit)
         self.inspector.state_changed.connect(self._on_inspector_state_changed)
@@ -179,6 +193,14 @@ class MainWindow(QMainWindow):
         self.test_current_scene_action.setStatusTip("Launch the pygame runtime in the selected scene")
         self.test_current_scene_action.triggered.connect(self.test_current_scene)
         test_menu.addAction(self.test_current_scene_action)
+        self.test_current_battle_action = QAction("Test Current Battle", self)
+        self.test_current_battle_action.setStatusTip("Launch the pygame runtime directly in the selected battle")
+        self.test_current_battle_action.triggered.connect(self.test_current_battle)
+        test_menu.addAction(self.test_current_battle_action)
+        self.test_current_move_action = QAction("Test Current Move", self)
+        self.test_current_move_action.setStatusTip("Launch the real pygame QTE for the selected combat move")
+        self.test_current_move_action.triggered.connect(self.test_current_move)
+        test_menu.addAction(self.test_current_move_action)
         self.restart_test_action = QAction("Restart Test", self)
         self.restart_test_action.triggered.connect(self.restart_test)
         test_menu.addAction(self.restart_test_action)
@@ -396,6 +418,25 @@ class MainWindow(QMainWindow):
                 return scene_id
         return None
 
+    def current_battle_id(self) -> str | None:
+        """Return the battle represented by the current editor context."""
+
+        project = self.session.project
+        if project is None:
+            return None
+        selection = self.session.selection
+        battle_id = resolve_battle_id(selection, project)
+        if battle_id is not None:
+            return battle_id
+        # Nested Battle Editor selections are intentionally editor-local, so
+        # also consult the active element if the top-level selection is absent.
+        return resolve_battle_id(self.workspace.battle_editor.current_element, project)
+
+    def current_qte_test_context(self) -> tuple[str, int] | None:
+        """Return the move and actual difficulty selected in the move editor."""
+
+        return self.workspace.combat_move_editor.test_context()
+
     @property
     def test_process_running(self) -> bool:
         return self.test_process is not None and self.test_process.state() != QProcess.ProcessState.NotRunning
@@ -418,17 +459,43 @@ class MainWindow(QMainWindow):
         self._update_action_state()
         return True
 
-    def _prepare_test_launch(self, scene_id: str) -> bool:
+    def _prepare_test_launch(
+        self,
+        scene_id: str | None = None,
+        battle_id: str | None = None,
+        qte_move_id: str | None = None,
+        qte_level: int | None = None,
+    ) -> bool:
         if self.session.story_root is None:
             return False
         if self.session.is_dirty and not self.save_story():
             return False
         self.session.validate()
-        if self.session.diagnostics.errors:
+        errors = self.session.diagnostics.errors
+        if battle_id is not None:
+            source = None
+            if self.session.project is not None:
+                definition = self.session.project.battles.get(battle_id)
+                source = getattr(definition, "source", None)
+            errors = tuple(item for item in errors if source is not None and item.source == source)
+        elif qte_move_id is not None:
+            source = None
+            if self.session.project is not None:
+                definition = self.session.project.moves.get(qte_move_id)
+                source = getattr(definition, "source", None)
+            errors = tuple(item for item in errors if source is not None and item.source == source)
+        if errors:
+            target = "battle" if battle_id is not None else "QTE" if qte_move_id is not None else "scene"
+            if qte_move_id is not None:
+                title = "QTE configuration has validation errors"
+                message = "QTE configuration has validation errors.\n\nTest Anyway?"
+            else:
+                title = "Battle validation errors" if battle_id is not None else "Story validation errors"
+                message = f"{'Battle' if battle_id is not None else 'The story'} contains validation errors.\n\nTest {target} anyway?"
             answer = QMessageBox.warning(
                 self,
-                "Story validation errors",
-                "The story contains validation errors. Test the scene anyway?",
+                title,
+                message,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
@@ -451,27 +518,90 @@ class MainWindow(QMainWindow):
             return False
         return self._launch_test(scene_id)
 
-    def _launch_test(self, scene_id: str) -> bool:
+    def test_current_battle(self) -> bool:
+        """Save, validate, and launch the selected battle in pygame."""
+
+        battle_id = self.current_battle_id()
+        if battle_id is None or self.session.story_root is None:
+            self.statusBar().showMessage("Select a battle to test")
+            return False
+        if self.test_process_running:
+            self.statusBar().showMessage(f"Already testing: {self._test_battle_id or battle_id}")
+            return False
+        if not self._prepare_test_launch(battle_id=battle_id):
+            return False
+        return self._launch_test(battle_id=battle_id)
+
+    def test_current_move(self) -> bool:
+        """Save, validate, and launch the selected move's real QTE."""
+
+        context = self.current_qte_test_context()
+        if context is None or self.session.story_root is None:
+            self.statusBar().showMessage("Select a combat move to test")
+            return False
+        move_id, level = context
+        if self.test_process_running:
+            self.statusBar().showMessage(f"Already testing: {self._test_qte_move_id or move_id}")
+            return False
+        if not self._prepare_test_launch(qte_move_id=move_id, qte_level=level):
+            return False
+        return self._launch_test(qte_move_id=move_id, qte_level=level)
+
+    def _launch_test(
+        self,
+        scene_id: str | None = None,
+        *,
+        battle_id: str | None = None,
+        qte_move_id: str | None = None,
+        qte_level: int | None = None,
+    ) -> bool:
         """Create one temporary config and start the child process."""
-        if self.session.story_root is None or self.test_process_running:
+        selected_targets = sum(target is not None for target in (scene_id, battle_id, qte_move_id))
+        if self.session.story_root is None or self.test_process_running or selected_targets != 1:
             return False
         try:
-            temporary = tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", suffix=".json", prefix="cyoa-test-", delete=False
-            )
-            temporary.close()
-            self._test_config_path = Path(temporary.name)
-            self._test_configuration.write_json(self._test_config_path)
+            if qte_move_id is None:
+                try:
+                    temporary = tempfile.NamedTemporaryFile(
+                        mode="w", encoding="utf-8", suffix=".json", prefix="cyoa-test-", delete=False
+                    )
+                    temporary.close()
+                    self._test_config_path = Path(temporary.name)
+                except OSError as exc:
+                    raise DeveloperTestConfigError(str(exc)) from exc
+            if battle_id is None and qte_move_id is None:
+                self._test_configuration.write_json(self._test_config_path)
+            elif battle_id is not None:
+                BattleTestConfiguration(
+                    battle_id=battle_id,
+                    flags=self._test_configuration.flags,
+                    variables=self._test_configuration.variables,
+                    inventory=self._test_configuration.inventory,
+                    stats=self._test_configuration.stats,
+                ).write_json(self._test_config_path)
         except (OSError, DeveloperTestConfigError) as exc:
             if self._test_config_path is not None:
                 self._cleanup_test_config()
             QMessageBox.critical(self, "Could not prepare test state", str(exc))
             return False
-        launch = SceneTestLaunch(
-            story_root=self.session.story_root,
-            scene_id=scene_id,
-            shared_assets_root=self.session.shared_assets_root,
-            test_config_path=self._test_config_path,
+        launch = (
+            QteTestLaunch(
+                story_root=self.session.story_root,
+                move_id=qte_move_id or "",
+                difficulty_level=qte_level if qte_level is not None else 1,
+                shared_assets_root=self.session.shared_assets_root,
+            )
+            if qte_move_id is not None else BattleTestLaunch(
+                story_root=self.session.story_root,
+                battle_id=battle_id or "",
+                shared_assets_root=self.session.shared_assets_root,
+                test_config_path=self._test_config_path,
+            ) if battle_id is not None else SceneTestLaunch(
+                story_root=self.session.story_root,
+                scene_id=scene_id or "",
+                shared_assets_root=self.session.shared_assets_root,
+                test_config_path=self._test_config_path,
+            )
         )
         program, arguments, working_directory = launch.command()
         process = QProcess(self)
@@ -482,24 +612,38 @@ class MainWindow(QMainWindow):
         process.finished.connect(self._on_test_process_finished)
         self.test_process = process
         self._test_scene_id = scene_id
+        self._test_battle_id = battle_id
+        self._test_qte_move_id = qte_move_id
+        self._test_qte_level = qte_level
         self._test_output = []
         self._test_error_reported = False
         self._test_context_valid = True
         process.start(program, arguments)
-        self.statusBar().showMessage(f"Testing: {scene_id}")
+        label = f"QTE {qte_move_id} — Level {qte_level}" if qte_move_id is not None else f"{'battle' if battle_id is not None else 'scene'}: {battle_id or scene_id}"
+        self.statusBar().showMessage(f"Testing {label}")
         self._update_action_state()
         return True
 
     def restart_test(self) -> bool:
-        """Restart asynchronously with the selected scene and current state."""
+        """Restart asynchronously with the currently selected context/state."""
 
         scene_id = self.current_scene_id()
-        if scene_id is None or self.session.story_root is None:
-            self.statusBar().showMessage("Select a scene to restart")
+        battle_id = self.current_battle_id()
+        qte_context = self.current_qte_test_context()
+        qte_move_id, qte_level = qte_context if qte_context is not None else (None, None)
+        if (scene_id is None and battle_id is None and qte_move_id is None) or self.session.story_root is None:
+            self.statusBar().showMessage("Select a scene, battle, or combat move to restart")
             return False
         if not self._test_context_valid and not self.test_process_running:
-            return self.test_current_scene()
-        if not self._prepare_test_launch(scene_id):
+            if qte_move_id is not None:
+                return self.test_current_move()
+            return self.test_current_battle() if battle_id is not None else self.test_current_scene()
+        if not self._prepare_test_launch(
+            scene_id=scene_id if qte_move_id is None else None,
+            battle_id=battle_id if qte_move_id is None else None,
+            qte_move_id=qte_move_id,
+            qte_level=qte_level,
+        ):
             return False
         self._pending_restart = True
         if self.test_process_running:
@@ -507,7 +651,9 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Restarting test...")
             return True
         self._pending_restart = False
-        return self._launch_test(scene_id)
+        if qte_move_id is not None:
+            return self._launch_test(qte_move_id=qte_move_id, qte_level=qte_level)
+        return self._launch_test(scene_id, battle_id=battle_id) if battle_id is None else self._launch_test(battle_id=battle_id)
 
     def stop_test(self) -> bool:
         if not self.test_process_running:
@@ -562,12 +708,17 @@ class MainWindow(QMainWindow):
         self._read_test_stdout()
         self._read_test_stderr()
         scene_id = self._test_scene_id or "scene"
+        battle_id = self._test_battle_id
+        qte_move_id = self._test_qte_move_id
         diagnostics = "".join(self._test_output).strip()
         failed = exit_code != 0
         restarting = self._pending_restart and not self._closing
         stopping = self._test_stop_was_requested
         self.test_process = None
         self._test_scene_id = None
+        self._test_battle_id = None
+        self._test_qte_move_id = None
+        self._test_qte_level = None
         self._cleanup_test_config()
         self._termination_for_restart = False
         self._pending_restart = False if restarting else self._pending_restart
@@ -576,8 +727,20 @@ class MainWindow(QMainWindow):
             return
         if restarting:
             next_scene = self.current_scene_id()
-            if next_scene is not None and self._prepare_test_launch(next_scene):
-                self._launch_test(next_scene)
+            next_battle = self.current_battle_id()
+            next_qte = self.current_qte_test_context()
+            if (next_scene is not None or next_battle is not None or next_qte is not None) and self._prepare_test_launch(
+                scene_id=next_scene if next_qte is None else None,
+                battle_id=next_battle if next_qte is None else None,
+                qte_move_id=next_qte[0] if next_qte is not None else None,
+                qte_level=next_qte[1] if next_qte is not None else None,
+            ):
+                if next_qte is not None:
+                    self._launch_test(qte_move_id=next_qte[0], qte_level=next_qte[1])
+                elif next_battle is not None:
+                    self._launch_test(battle_id=next_battle)
+                else:
+                    self._launch_test(next_scene)
             else:
                 self.statusBar().showMessage("Test restart cancelled")
             return
@@ -594,7 +757,7 @@ class MainWindow(QMainWindow):
         elif failed:
             self.statusBar().showMessage("Test runtime failed to launch")
         else:
-            self.statusBar().showMessage(f"Test finished: {scene_id}")
+            self.statusBar().showMessage(f"Test finished: {qte_move_id or battle_id or scene_id}")
 
     def _on_browser_selection(self, selection: DefinitionSelection | None) -> None:
         self.session.select(selection)
@@ -616,6 +779,18 @@ class MainWindow(QMainWindow):
         self.workspace.open_scene_editor()
         self._refresh_views()
         self.statusBar().showMessage(f"Opened scene {scene_id}")
+
+    def _open_move_definition(self, move_id: str) -> None:
+        project = self.session.project
+        if project is None or project.index is None:
+            return
+        entry = project.index.entry(ContentKind.MOVE, move_id)
+        if entry is None:
+            return
+        self.session.select(DefinitionSelection(ContentKind.MOVE, move_id, entry.source))
+        self._refresh_views()
+        self.workspace.open_combat_move_editor()
+        self.statusBar().showMessage(f"Opened move {move_id}")
 
     def _open_graph_navigation(self, edge: SceneGraphEdge) -> None:
         project = self.session.project
@@ -734,6 +909,18 @@ class MainWindow(QMainWindow):
         self.test_current_scene_action.setEnabled(
             has_project and self.current_scene_id() is not None and not self.test_process_running
         )
+        self.test_current_battle_action.setEnabled(
+            has_project and self.current_battle_id() is not None and not self.test_process_running
+        )
+        self.test_current_move_action.setEnabled(
+            has_project and self.current_qte_test_context() is not None and not self.test_process_running
+        )
+        self.workspace.battle_editor.test_button.setEnabled(
+            has_project and self.current_battle_id() is not None and not self.test_process_running
+        )
+        self.workspace.combat_move_editor.test_button.setEnabled(
+            has_project and self.current_qte_test_context() is not None and not self.test_process_running
+        )
         self.configure_test_state_action.setEnabled(has_project)
         self.restart_test_action.setEnabled(
             has_project and (self._test_context_valid or self.test_process_running)
@@ -794,6 +981,9 @@ class MainWindow(QMainWindow):
             process.waitForFinished(1500)
         self.test_process = None
         self._test_scene_id = None
+        self._test_battle_id = None
+        self._test_qte_move_id = None
+        self._test_qte_level = None
         self._cleanup_test_config()
 
     def _cleanup_test_config(self) -> None:

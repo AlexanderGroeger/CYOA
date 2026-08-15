@@ -10,9 +10,10 @@ remains deterministic and unit-testable here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import inspect
 import math
 import random
-from typing import Any, Callable
+from typing import Any, Callable, get_args, get_origin
 
 from engine.battle.controls import BattleInput
 
@@ -35,6 +36,126 @@ DIFFICULTY_MODIFIERS = {
     "normal": {"window_scale": 1.00, "speed_scale": 1.00, "force_scale": 1.00},
     "hard": {"window_scale": 0.76, "speed_scale": 1.20, "force_scale": 1.25},
 }
+
+
+@dataclass(frozen=True)
+class QTEFieldSpec:
+    """Runtime-owned authoring metadata for one QTE configuration field.
+
+    This is intentionally a small semantic description rather than a Qt
+    widget contract.  The Story Designer consumes it to generate controls,
+    while the battle runtime remains the authority for defaults and behavior.
+    """
+
+    key: str
+    label: str = ""
+    description: str = ""
+    value_type: str = "number"
+    default: Any = None
+    has_default: bool = False
+    minimum: int | float | None = None
+    maximum: int | float | None = None
+    enum_values: tuple[Any, ...] = ()
+    asset_kind: str | None = None
+    group: str = "Parameters"
+    authored_section: str = "tuning_parameters"
+    editor_hint: str | None = None
+    aliases: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "key", str(self.key))
+        object.__setattr__(self, "label", self.label or self.key.replace("_", " ").title())
+        object.__setattr__(self, "description", str(self.description or ""))
+        object.__setattr__(self, "enum_values", tuple(self.enum_values or ()))
+        object.__setattr__(self, "aliases", tuple(str(value) for value in self.aliases))
+
+
+@dataclass(frozen=True)
+class QTEEditorSpec:
+    """Complete authoring metadata for one registered QTE type."""
+
+    type: str
+    display_name: str
+    description: str
+    fields: tuple[QTEFieldSpec, ...] = ()
+    supported: bool = True
+    unsupported_reason: str | None = None
+
+    @property
+    def field_map(self) -> dict[str, QTEFieldSpec]:
+        result: dict[str, QTEFieldSpec] = {}
+        for field_spec in self.fields:
+            result[field_spec.key] = field_spec
+            result.update({alias: field_spec for alias in field_spec.aliases})
+        return result
+
+
+def _qte_field_metadata(key: str, default: Any, annotation: Any) -> dict[str, Any]:
+    """Infer safe control metadata from a registered QTE constructor."""
+
+    lower = key.lower()
+    annotation_text = str(annotation).lower()
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if isinstance(default, bool) or annotation is bool or "bool" in annotation_text and "list" not in annotation_text:
+        value_type = "boolean"
+    elif isinstance(default, int) and not isinstance(default, bool) or annotation is int or "int" in annotation_text and "list" not in annotation_text and "float" not in annotation_text:
+        value_type = "integer"
+    elif isinstance(default, (list, tuple)) or origin in (list, tuple) or "list[" in annotation_text or "tuple[" in annotation_text:
+        value_type = "list"
+    elif annotation is str or isinstance(default, str):
+        value_type = "string"
+    else:
+        # Union[int/float, None] and postponed annotations are most useful as
+        # numeric controls in this registry.  The runtime constructor still
+        # performs the final defensive conversion.
+        value_type = "float"
+        if args and any(value is int for value in args) and not any(value is float for value in args):
+            value_type = "integer"
+    minimum: int | float | None = None
+    if value_type in {"integer", "float"}:
+        minimum = 0 if any(token in lower for token in ("duration", "speed", "radius", "width", "height", "count", "hits", "delay", "gravity", "tolerance", "window", "angle")) else None
+    group = "Scoring" if any(token in lower for token in ("threshold", "window", "tolerance", "radius", "multiplier", "score")) else "Timing"
+    if any(token in lower for token in ("x", "y", "position", "offset", "height", "width", "radius", "angle", "region", "arc")):
+        group = "Geometry"
+    if any(token in lower for token in ("sound", "animation", "pitch")):
+        group = "Animation"
+    if any(token in lower for token in ("input", "prompt", "direction")):
+        group = "Input"
+    enum_values: tuple[Any, ...] = ()
+    if key == "contraction_curve":
+        value_type, enum_values = "enum", ("linear",)
+    if key == "block_spacing":
+        value_type = "list"
+    return {
+        "value_type": value_type,
+        "minimum": minimum,
+        "group": group,
+        "editor_hint": "scalar_list" if value_type == "list" else None,
+        "enum_values": enum_values,
+    }
+
+
+def _build_qte_editor_spec(type_name: str, qte_class: Callable[..., AttackQTE]) -> QTEEditorSpec:
+    fields: list[QTEFieldSpec] = []
+    common = {"duration", "thresholds", "multipliers", "label", "sound", "animation", "allowed_inputs", "rng"}
+    for key, parameter in inspect.signature(qte_class.__init__).parameters.items():
+        if key in {"self", *common} or parameter.kind in (parameter.VAR_KEYWORD, parameter.VAR_POSITIONAL):
+            continue
+        default = parameter.default
+        metadata = _qte_field_metadata(key, default, parameter.annotation)
+        fields.append(QTEFieldSpec(
+            key=key,
+            default=None if default is inspect.Parameter.empty else default,
+            has_default=default is not inspect.Parameter.empty,
+            **metadata,
+        ))
+    return QTEEditorSpec(
+        type_name,
+        type_name.replace("_", " ").title(),
+        f"Authoring fields for the registered {type_name.replace('_', ' ')} QTE.",
+        tuple(fields),
+    )
 
 
 def clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
@@ -1617,6 +1738,46 @@ QTE_REGISTRY: dict[str, Callable[..., AttackQTE]] = {
     "moving_weak_point": MovingWeakPointQTE,
     "stability": StabilityQTE,
 }
+
+
+# The registry is the source of truth for coverage.  Keeping this derived
+# table beside it means a newly registered constructor cannot silently
+# disappear from the Designer's QTE editor.
+QTE_EDITOR_SPECS: dict[str, QTEEditorSpec] = {
+    name: _build_qte_editor_spec(name, qte_class)
+    for name, qte_class in QTE_REGISTRY.items()
+}
+
+
+def qte_editor_spec(type_name: str) -> QTEEditorSpec | None:
+    """Return metadata for a canonical or legacy QTE identifier."""
+
+    return QTE_EDITOR_SPECS.get(canonical_qte_type(str(type_name)))
+
+
+def qte_editor_specs() -> tuple[QTEEditorSpec, ...]:
+    """Return every registered QTE's authoring metadata in registry order."""
+
+    return tuple(QTE_EDITOR_SPECS.values())
+
+
+def minimal_qte_payload(type_name: str) -> dict[str, Any] | None:
+    """Return the smallest valid modern QTE envelope for a known type."""
+
+    canonical = canonical_qte_type(str(type_name))
+    if canonical not in QTE_REGISTRY:
+        return None
+    return {"type": canonical}
+
+
+def registered_qte_types() -> tuple[str, ...]:
+    return tuple(QTE_REGISTRY)
+
+
+# Descriptive aliases make the registry boundary discoverable to tools that
+# prefer registry terminology over the plural constant name.
+QTE_EDITOR_REGISTRY = QTE_EDITOR_SPECS
+get_qte_editor_spec = qte_editor_spec
 
 
 def _difficulty_values(difficulty: str) -> dict[str, float]:

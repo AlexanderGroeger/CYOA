@@ -1,0 +1,12 @@
+skill_progression: {evaluation_attempts: 2, promotion_average: 2.5, demotion_average: 1.5, minimum_level: 1}
+moves:
+  - id: intro
+    name: Intro Strike
+    common:
+      base_power: 4
+      qte: {type: precision_bar, label: Strike, pattern_parameters: {target_position: 0.5}, future_qte: {keep: true}}
+    difficulty_levels:
+      0: {qte: {duration: 2.0, tuning_parameters: {critical_window: 0.04}}}
+      1: {qte: {duration: 1.5, tuning_parameters: {critical_window: 0.03}}}
+      2: {qte: {duration: 1.2, tuning_parameters: {critical_window: 0.02}}}
+    future_move_extension: {preserves: true}

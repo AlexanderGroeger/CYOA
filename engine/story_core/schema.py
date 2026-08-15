@@ -544,15 +544,72 @@ def default_schema_registry() -> SchemaRegistry:
         ),
         aliases=("moves", "combat_move"),
     )
+    registry.register(Schema(
+            "battle_enemy",
+            (
+                _field("name", string(), required=True, description="Opponent display name."),
+                _field("hp", integer(), minimum=1, ui_hint="spinbox"),
+                _field("attack", integer(), minimum=0, ui_hint="spinbox"),
+                _field("defense", integer(), minimum=0, ui_hint="spinbox"),
+                _field("sprite", TypeSpec.asset("sprites"), asset_kind="sprites"),
+                _field("animation", TypeSpec.reference("animation"), reference_target="animation"),
+            ),
+            "Safe static enemy presentation and combat values.",
+        ))
+    registry.register(Schema(
+            "battle_arena",
+            (
+                _field("x", integer(), ui_hint="spinbox"),
+                _field("y", integer(), ui_hint="spinbox"),
+                _field("width", integer(), minimum=1, ui_hint="spinbox"),
+                _field("height", integer(), minimum=1, ui_hint="spinbox"),
+                _field("player_speed", TypeSpec.number(), minimum=0, ui_hint="spinbox"),
+            ),
+            "Battle arena geometry and player movement speed.",
+        ))
+    registry.register(Schema(
+            "battle_enemy_move",
+            (
+                _field("id", string(), required=True),
+                _field("name", string()),
+                _field("pattern", string(), description="Referenced defense sequence/pattern ID."),
+                _field("weight", TypeSpec.number(), minimum=0, ui_hint="spinbox"),
+                _field("cooldown", integer(), minimum=0, ui_hint="spinbox"),
+                _field("telegraph_duration", TypeSpec.number(), minimum=0, ui_hint="spinbox"),
+            ),
+            "Safe summary fields for an enemy move; specialized payloads remain opaque.",
+        ))
+    registry.register(Schema(
+            "battle_phase",
+            (
+                _field("id", string()),
+                _field("name", string()),
+                _field("when", TypeSpec.condition(dialect="battle"), read_only=True),
+                _field("actions", list_of(TypeSpec.object()), read_only=True),
+            ),
+            "Battle phase metadata and opaque transition actions.",
+        ))
+    registry.register(Schema(
+            "battle_dialogue",
+            (
+                _field("trigger", string()),
+                _field("text", TypeSpec.multiline_string(), ui_hint="multiline"),
+                _field("type", string()),
+                _field("once", boolean()),
+                _field("pause", TypeSpec.number(), minimum=0, ui_hint="spinbox"),
+                _field("when", TypeSpec.condition(dialect="battle"), read_only=True),
+            ),
+            "Simple battle dialogue presentation fields; triggers and metadata are preserved.",
+        ))
     registry.register(
         Schema(
             "battle",
             (
                 _field("id", string(), description="Informational; battle lookup is filename-based."),
                 _field("enemy", TypeSpec.object("battle_enemy"), object_schema="battle_enemy", required=True),
-                _field("arena", mapping()),
-                _field("enemy_moves", list_of(TypeSpec.object("enemy_move")), default=[]),
-                _field("defense_sequences", list_of(TypeSpec.object("defense_sequence")), aliases=("enemy_patterns",), default=[]),
+                _field("arena", TypeSpec.object("battle_arena"), object_schema="battle_arena"),
+                _field("enemy_moves", list_of(TypeSpec.object("battle_enemy_move")), default=[]),
+                _field("defense_sequences", list_of(TypeSpec.object()), aliases=("enemy_patterns",), default=[]),
                 _field("initial_player_moves", list_of(TypeSpec.reference("move")), reference_target="move"),
                 _field("initial_enemy_moves", list_of(string())),
                 _field("enemy_sequence", list_of(string())),
@@ -564,6 +621,7 @@ def default_schema_registry() -> SchemaRegistry:
                 _field("victory", mapping(), default={}),
                 _field("defeat", mapping(), default={}),
                 _field("on_lose", mapping()),
+                _field("test_sequences_restore_hp", boolean(), default=True),
             ),
             "Battle envelope; detailed QTE and defense validation remains specialized.",
         ),

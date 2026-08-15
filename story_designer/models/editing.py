@@ -154,6 +154,49 @@ class DefinitionWorkingCopy:
         self.mapping = _copy(self.original_mapping)
 
 
+@dataclass
+class SourceDocumentWorkingCopy:
+    """Mutable complete source document used for file-level settings."""
+
+    relative_path: str
+    original_mapping: Any
+    mapping: Any
+    patches: dict[PropertyPath, Any] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_mapping(cls, relative_path: str, mapping: Any) -> "SourceDocumentWorkingCopy":
+        return cls(str(relative_path), _copy(mapping), _copy(mapping))
+
+    @property
+    def is_dirty(self) -> bool:
+        return self.mapping != self.original_mapping
+
+    def to_mapping(self) -> Any:
+        return _copy(self.mapping)
+
+    def revert(self) -> None:
+        self.mapping = _copy(self.original_mapping)
+        self.patches.clear()
+
+    def set_value(self, path: Sequence[str | int], value: Any) -> None:
+        property_path = tuple(path)
+        _set_path(self.mapping, property_path, _copy(value))
+        self.patches[property_path] = _copy(value)
+
+    def remove_value(self, path: Sequence[str | int]) -> None:
+        property_path = tuple(path)
+        _remove_path(self.mapping, property_path)
+        self.patches[property_path] = MISSING
+
+    def rebase(self, base_mapping: Any) -> None:
+        self.mapping = _copy(base_mapping)
+        for path, value in self.patches.items():
+            if value is MISSING:
+                _remove_path(self.mapping, path)
+            else:
+                _set_path(self.mapping, path, _copy(value))
+
+
 class EditValidationError(ValueError):
     """Raised when an editing command fails schema-level validation."""
 
@@ -603,6 +646,233 @@ class SetPropertyCommand(EditCommand):
     def apply(self, working_copy: DefinitionWorkingCopy) -> None:
         self._old_mapping = working_copy.to_mapping()
         self.old_authored_value = _copy(working_copy.value(self.path))
+        working_copy.set_value(self.path, self.value)
+
+
+class SetSourcePropertyCommand(EditCommand):
+    """Edit a file-level property while retaining its authored absence."""
+
+    operation = "set_source_property"
+
+    def __init__(self, selection: DefinitionSelection, source_path: str, path: Sequence[str | int], value: Any) -> None:
+        self.source_path = str(source_path).replace("\\", "/")
+        self.value = _copy(value)
+        super().__init__(selection, path)
+
+    def validate(self, model: PropertyModel | None = None) -> ValidationResult:
+        if not self.path or any(not isinstance(component, (str, int)) for component in self.path):
+            return ValidationResult.error("A source property path is required.")
+        if self.path[:1] == ("skill_progression",) and len(self.path) == 2:
+            key = self.path[1]
+            if key in {"evaluation_attempts", "minimum_level"} and (not isinstance(self.value, int) or isinstance(self.value, bool) or self.value < 1):
+                return ValidationResult.error(f"skill_progression.{key} must be a positive integer.")
+            if key in {"promotion_average", "demotion_average"} and (not isinstance(self.value, (int, float)) or isinstance(self.value, bool) or not 0 <= float(self.value) <= 3):
+                return ValidationResult.error(f"skill_progression.{key} must be a number between 0 and 3.")
+        return ValidationResult.ok()
+
+    def validate_source(self, document: Any) -> ValidationResult:
+        result = self.validate(None)
+        if not result.valid or self.path[:1] != ("skill_progression",):
+            return result
+        candidate = _copy(document)
+        _set_path(candidate, self.path, _copy(self.value))
+        try:
+            from engine.battle.move_progression import SkillProgressionConfig
+            from engine.errors import BattleConfigError
+            progression = candidate.get("skill_progression") if isinstance(candidate, Mapping) else None
+            SkillProgressionConfig.from_data(progression)
+        except (BattleConfigError, ValueError, TypeError) as exc:
+            return ValidationResult.error(str(exc))
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: SourceDocumentWorkingCopy) -> None:  # type: ignore[override]
+        self._old_mapping = working_copy.to_mapping()
+        self.old_authored_value = _get_path(working_copy.mapping, self.path, default=MISSING)
+        working_copy.set_value(self.path, self.value)
+
+    def undo(self, working_copy: SourceDocumentWorkingCopy) -> None:  # type: ignore[override]
+        if self._old_mapping is None:
+            raise RuntimeError("Source command has not been applied")
+        if self.old_authored_value is MISSING:
+            working_copy.remove_value(self.path)
+            working_copy.patches.pop(tuple(self.path), None)
+        else:
+            working_copy.set_value(self.path, self.old_authored_value)
+
+
+class CombatMoveCommand(EditCommand):
+    """Atomic command base for combat-move structure/QTE operations."""
+
+    operation = "combat_move_edit"
+
+    def __init__(self, selection: DefinitionSelection, path: Sequence[str | int] = ()) -> None:
+        super().__init__(selection, path)
+        self._before_mapping: dict[str, Any] | None = None
+        self._after_mapping: dict[str, Any] | None = None
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        if self._after_mapping is not None:
+            working_copy.mapping = _copy(self._after_mapping)
+            return
+        self._before_mapping = working_copy.to_mapping()
+        self._apply_once(working_copy)
+        self._after_mapping = working_copy.to_mapping()
+
+    def undo(self, working_copy: DefinitionWorkingCopy) -> None:
+        if self._before_mapping is None:
+            raise RuntimeError("Combat move command has not been applied")
+        working_copy.mapping = _copy(self._before_mapping)
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        raise NotImplementedError
+
+
+class AddDifficultyLevelCommand(CombatMoveCommand):
+    operation = "add_difficulty_level"
+
+    def __init__(self, selection: DefinitionSelection, level: int | None = None) -> None:
+        self.level = level
+        super().__init__(selection, ("difficulty_levels", level if level is not None else "next"))
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        raw = model.mapping
+        if "difficulty_levels" not in raw:
+            return ValidationResult.error("Legacy moves do not have adaptive difficulty levels; add the modern schema explicitly first.")
+        levels = raw.get("difficulty_levels")
+        if not isinstance(levels, Mapping):
+            return ValidationResult.error("difficulty_levels must be a mapping.")
+        numeric = sorted(key for key in levels if isinstance(key, int) and not isinstance(key, bool) and key >= 0)
+        self.level = (max(numeric) + 1) if numeric else 1 if self.level is None else self.level
+        if self.level < 0 or self.level in levels:
+            return ValidationResult.error(f"Difficulty level {self.level} already exists or is invalid.")
+        return ValidationResult.ok()
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        levels = working_copy.mapping.setdefault("difficulty_levels", {})
+        if not isinstance(levels, dict):
+            raise TypeError("difficulty_levels must be a mapping")
+        assert self.level is not None
+        levels[self.level] = {}
+
+
+class DeleteDifficultyLevelCommand(CombatMoveCommand):
+    operation = "delete_difficulty_level"
+
+    def __init__(self, selection: DefinitionSelection, level: int) -> None:
+        self.level = int(level)
+        super().__init__(selection, ("difficulty_levels", self.level))
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        raw = model.mapping
+        levels = raw.get("difficulty_levels")
+        if not isinstance(levels, Mapping) or self.level not in levels:
+            return ValidationResult.error(f"Difficulty level {self.level} is not authored.")
+        if self.level >= 1:
+            remaining = sorted(key for key in levels if isinstance(key, int) and key >= 1 and key != self.level)
+            if not remaining or remaining[0] != 1 or remaining != list(range(1, remaining[-1] + 1)):
+                return ValidationResult.error("Cannot delete this normal level; level 1 and contiguous adaptive levels are required.")
+        return ValidationResult.ok()
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        levels = working_copy.mapping.get("difficulty_levels")
+        if not isinstance(levels, dict):
+            raise TypeError("difficulty_levels must be a mapping")
+        del levels[self.level]
+
+
+class DuplicateDifficultyLevelCommand(CombatMoveCommand):
+    operation = "duplicate_difficulty_level"
+
+    def __init__(self, selection: DefinitionSelection, source_level: int, target_level: int | None = None) -> None:
+        self.source_level = int(source_level)
+        self.target_level = target_level
+        super().__init__(selection, ("difficulty_levels", target_level if target_level is not None else "next"))
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        levels = model.mapping.get("difficulty_levels")
+        if not isinstance(levels, Mapping) or self.source_level not in levels:
+            return ValidationResult.error(f"Difficulty level {self.source_level} is not authored.")
+        numeric = sorted(key for key in levels if isinstance(key, int) and not isinstance(key, bool) and key >= 0)
+        self.target_level = max(numeric) + 1 if numeric and self.target_level is None else (1 if self.target_level is None else self.target_level)
+        if self.target_level < 0 or self.target_level in levels:
+            return ValidationResult.error(f"Difficulty level {self.target_level} already exists or is invalid.")
+        return ValidationResult.ok()
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        levels = working_copy.mapping.get("difficulty_levels")
+        if not isinstance(levels, dict) or self.source_level not in levels or self.target_level is None:
+            raise KeyError("Difficulty level duplication source is no longer available")
+        levels[self.target_level] = _copy(levels[self.source_level])
+
+
+class ReplaceQTETypeCommand(CombatMoveCommand):
+    operation = "replace_qte_type"
+
+    def __init__(self, selection: DefinitionSelection, type_name: str) -> None:
+        self.type_name = str(type_name)
+        super().__init__(selection, ("qte", "type"))
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        from engine.battle.qte import qte_editor_spec
+        if qte_editor_spec(self.type_name) is None:
+            return ValidationResult.error(f"Unknown or unsupported QTE type {self.type_name!r}.")
+        return ValidationResult.ok()
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
+        from engine.battle.qte import minimal_qte_payload
+        payload = minimal_qte_payload(self.type_name)
+        if payload is None:
+            raise ValueError(f"Unknown QTE type {self.type_name!r}")
+        mapping = working_copy.mapping
+        if isinstance(mapping.get("common"), dict) and isinstance(mapping["common"].get("qte"), dict):
+            mapping["common"]["qte"] = payload
+        elif isinstance(mapping.get("qte"), dict):
+            mapping["qte"] = payload
+        elif "pattern" in mapping:
+            mapping["pattern"] = self.type_name
+            mapping.pop("pattern_config", None)
+        else:
+            mapping.setdefault("common", {})["qte"] = payload
+
+
+class SetCombatMoveFieldCommand(CombatMoveCommand):
+    operation = "set_combat_move_field"
+
+    def __init__(self, selection: DefinitionSelection, path: Sequence[str | int], value: Any) -> None:
+        self.value = _copy(value)
+        super().__init__(selection, path)
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        if not self.path:
+            return ValidationResult.error("A combat-move field path is required.")
+        # Metadata validates scalar/list shape before mutation.  Unknown
+        # fields remain editable only through an explicitly visible Advanced
+        # payload path, where arbitrary authored data is intentionally kept.
+        from .combat_move_presentation import CombatMoveDocumentModel
+        presentation = CombatMoveDocumentModel(model.selection.id, model.mapping, model.project)
+        field = next((item for item in presentation.qte_fields() if item.path == self.path), None)
+        if field is not None and field.spec is not None:
+            kind = field.spec.value_type
+            valid = (
+                (kind == "integer" and isinstance(self.value, int) and not isinstance(self.value, bool))
+                or (kind in {"float", "number"} and isinstance(self.value, (int, float)) and not isinstance(self.value, bool))
+                or (kind == "boolean" and isinstance(self.value, bool))
+                or (kind in {"string", "enum", "asset"} and isinstance(self.value, str))
+                or (kind == "list" and isinstance(self.value, (list, tuple)))
+                or (kind == "mapping" and isinstance(self.value, Mapping))
+            )
+            if not valid:
+                return ValidationResult.error(f"{field.label} has an invalid value type.")
+            if field.spec.minimum is not None and isinstance(self.value, (int, float)) and self.value < field.spec.minimum:
+                return ValidationResult.error(f"{field.label} must be at least {field.spec.minimum}.")
+            if field.spec.maximum is not None and isinstance(self.value, (int, float)) and self.value > field.spec.maximum:
+                return ValidationResult.error(f"{field.label} must be at most {field.spec.maximum}.")
+        return ValidationResult.ok()
+
+    def _apply_once(self, working_copy: DefinitionWorkingCopy) -> None:
         working_copy.set_value(self.path, self.value)
 
 
@@ -1633,8 +1903,424 @@ def _valid_geometry_rect(value: Any) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# Battle defense-pattern commands
+
+def _defense_sequence_list(mapping: Mapping[str, Any], collection_path: PropertyPath) -> list[Any]:
+    value = _collection_at(mapping, collection_path)
+    if value is MISSING:
+        return []
+    if not isinstance(value, list):
+        raise TypeError("Defense sequences must be authored as a list")
+    return value
+
+
+def _defense_sequence(mapping: Mapping[str, Any], sequence_path: PropertyPath) -> Mapping[str, Any]:
+    value = _collection_at(mapping, sequence_path)
+    if not isinstance(value, Mapping):
+        raise KeyError(f"Defense sequence was not found at {sequence_path!r}")
+    return value
+
+
+def _defense_pattern(mapping: Mapping[str, Any], sequence_path: PropertyPath, index: int) -> Mapping[str, Any]:
+    sequence = _defense_sequence(mapping, sequence_path)
+    patterns = sequence.get("patterns")
+    if not isinstance(patterns, list) or not 0 <= index < len(patterns):
+        raise KeyError(f"Defense pattern {index} was not found at {sequence_path!r}")
+    value = patterns[index]
+    if not isinstance(value, Mapping):
+        raise TypeError("Defense pattern entries must be mappings")
+    return value
+
+
+def _defense_references(mapping: Any, identifier: str, *, skip_prefix: PropertyPath = ()) -> tuple[str, ...]:
+    """Find authored references without normalizing legacy battle shapes."""
+
+    reference_keys = {"pattern", "defense_sequence", "pattern_id", "sequence_id", "sequence"}
+    found: list[str] = []
+
+    def visit(value: Any, path: PropertyPath) -> None:
+        if isinstance(value, Mapping):
+            for key, child in value.items():
+                child_path = path + (str(key),)
+                if child_path[:len(skip_prefix)] == skip_prefix:
+                    continue
+                if str(key) in reference_keys and child == identifier:
+                    found.append(_path_text(child_path))
+                visit(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, path + (index,))
+
+    visit(mapping, ())
+    return tuple(dict.fromkeys(found))
+
+
+def defense_pattern_references(mapping: Mapping[str, Any], identifier: str) -> tuple[str, ...]:
+    """Public reference report used by the defense editor and diagnostics."""
+
+    return _defense_references(mapping, str(identifier))
+
+
+def _defense_type_valid(value: Any, type_spec: Any) -> bool:
+    if value is None:
+        return bool(getattr(type_spec, "nullable", False))
+    kind = getattr(type_spec, "kind", None)
+    if kind in {"string", "multiline_string", "reference", "asset"}:
+        return isinstance(value, str)
+    if kind == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if kind in {"float", "number"}:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if kind == "boolean":
+        return isinstance(value, bool)
+    if kind == "enum":
+        return value in type_spec.enum_values
+    if kind in {"object", "mapping"}:
+        return isinstance(value, Mapping)
+    if kind == "list":
+        return isinstance(value, (list, tuple)) and (
+            type_spec.element_type is None or all(_defense_type_valid(item, type_spec.element_type) for item in value)
+        )
+    if kind == "union":
+        return any(_defense_type_valid(value, variant) for variant in type_spec.variants.values())
+    return True
+
+
+def _defense_field_for_path(pattern: Mapping[str, Any], relative_path: PropertyPath):
+    from engine.battle.defense_metadata import defense_pattern_editor_spec
+
+    pattern_type = pattern.get("type")
+    spec = defense_pattern_editor_spec(pattern_type) if isinstance(pattern_type, str) else None
+    if spec is None or not spec.supported:
+        return None
+    field = spec.field(str(part) for part in relative_path)
+    if field is not None:
+        return field
+    wanted = tuple(str(part) for part in relative_path)
+    for candidate in spec.fields:
+        if len(candidate.path) == len(wanted) and all(
+            left == right or (index == len(wanted) - 1 and right in candidate.field.aliases)
+            for index, (left, right) in enumerate(zip(candidate.path, wanted))
+        ):
+            return candidate
+    return None
+
+
+def _set_nested_value(mapping: dict[str, Any], path: PropertyPath, value: Any) -> None:
+    current: Any = mapping
+    for component in path[:-1]:
+        if not isinstance(current, dict):
+            raise TypeError("Defense nested fields require mappings")
+        child = current.get(component)
+        if not isinstance(child, dict):
+            child = {}
+            current[component] = child
+        current = child
+    current[path[-1]] = _copy(value)
+
+
+class DefensePatternCommand(EditCommand):
+    """Base command for an entry in a modern defense sequence."""
+
+    def __init__(self, selection: DefinitionSelection, sequence_path: Sequence[str | int], index: int | None = None) -> None:
+        normalized_path = tuple(sequence_path)
+        # Callers may naturally pass either the sequence mapping path or its
+        # authored ``patterns`` collection path. Accept both without changing
+        # the serialized document shape.
+        if normalized_path and normalized_path[-1] == "patterns":
+            normalized_path = normalized_path[:-1]
+        path = normalized_path + ((int(index),) if index is not None else ())
+        super().__init__(selection, path)
+        self.sequence_path = normalized_path
+        self.index = int(index) if index is not None else None
+
+    @staticmethod
+    def _candidate_valid(candidate: Mapping[str, Any]) -> ValidationResult:
+        from engine.battle.defense import DefenseConfigError, validate_defense_sequence
+
+        try:
+            validate_defense_sequence({"patterns": [dict(candidate)]}, "defense_pattern")
+        except (DefenseConfigError, TypeError, ValueError) as exc:
+            return ValidationResult.error(str(exc))
+        return ValidationResult.ok()
+
+
+class InsertDefensePatternCommand(DefensePatternCommand):
+    operation = "insert_defense_pattern"
+
+    def __init__(self, selection: DefinitionSelection, sequence_path: Sequence[str | int], pattern: Mapping[str, Any], *, index: int | None = None) -> None:
+        super().__init__(selection, sequence_path, index)
+        self.pattern = _copy(dict(pattern))
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        if not isinstance(self.pattern, dict) or not isinstance(self.pattern.get("type"), str):
+            return ValidationResult.error("A defense pattern requires a registered type.")
+        candidate = self._candidate_valid(self.pattern)
+        if not candidate.valid:
+            return candidate
+        try:
+            sequence = _defense_sequence(model.mapping, self.sequence_path)
+        except (KeyError, TypeError) as exc:
+            return ValidationResult.error(str(exc))
+        if not isinstance(sequence.get("patterns"), list):
+            return ValidationResult.error("The selected defense sequence has no editable patterns list.")
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        sequence = _defense_sequence(working_copy.mapping, self.sequence_path)
+        patterns = sequence.setdefault("patterns", [])
+        if not isinstance(patterns, list):
+            raise TypeError("Defense sequence patterns must be a list")
+        self.index = len(patterns) if self.index is None else max(0, min(self.index, len(patterns)))
+        patterns.insert(self.index, _copy(self.pattern))
+
+
+class DuplicateDefensePatternCommand(DefensePatternCommand):
+    operation = "duplicate_defense_pattern"
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        try:
+            _defense_pattern(model.mapping, self.sequence_path, self.index if self.index is not None else -1)
+        except (KeyError, TypeError) as exc:
+            return ValidationResult.error(str(exc))
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        source = _defense_pattern(working_copy.mapping, self.sequence_path, self.index if self.index is not None else -1)
+        sequence = _defense_sequence(working_copy.mapping, self.sequence_path)
+        patterns = sequence["patterns"]
+        self.duplicate_index = (self.index or 0) + 1
+        duplicate = _copy(dict(source))
+        if isinstance(duplicate.get("id"), str):
+            base = duplicate["id"] + "_copy"
+            candidate = base
+            suffix = 2
+            ids = {item.get("id") for item in patterns if isinstance(item, Mapping)}
+            while candidate in ids:
+                candidate = f"{base}_{suffix}"
+                suffix += 1
+            duplicate["id"] = candidate
+        patterns.insert(self.duplicate_index, duplicate)
+
+
+class RemoveDefensePatternCommand(DefensePatternCommand):
+    operation = "remove_defense_pattern"
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        try:
+            pattern = _defense_pattern(model.mapping, self.sequence_path, self.index if self.index is not None else -1)
+        except (KeyError, TypeError) as exc:
+            return ValidationResult.error(str(exc))
+        identifier = pattern.get("id")
+        if isinstance(identifier, str) and identifier:
+            references = _defense_references(model.mapping, identifier, skip_prefix=self.sequence_path + ("patterns", self.index))
+            if references:
+                return ValidationResult.error(
+                    f"Cannot delete referenced defense pattern {identifier!r}: " + ", ".join(references)
+                )
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        sequence = _defense_sequence(working_copy.mapping, self.sequence_path)
+        patterns = sequence["patterns"]
+        self.removed_pattern = _copy(patterns.pop(self.index if self.index is not None else -1))
+
+
+class MoveDefensePatternCommand(DefensePatternCommand):
+    operation = "move_defense_pattern"
+
+    def __init__(self, selection: DefinitionSelection, sequence_path: Sequence[str | int], index: int, new_index: int) -> None:
+        super().__init__(selection, sequence_path, index)
+        self.new_index = int(new_index)
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        try:
+            patterns = _defense_sequence(model.mapping, self.sequence_path).get("patterns")
+            if not isinstance(patterns, list) or not 0 <= self.index < len(patterns):
+                raise KeyError("The selected defense pattern no longer exists.")
+        except (KeyError, TypeError) as exc:
+            return ValidationResult.error(str(exc))
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        patterns = _defense_sequence(working_copy.mapping, self.sequence_path)["patterns"]
+        destination = max(0, min(self.new_index, len(patterns) - 1))
+        value = patterns.pop(self.index)
+        patterns.insert(destination, value)
+        self.new_index = destination
+
+
+class SetDefensePatternParameterCommand(EditCommand):
+    operation = "set_defense_pattern_parameter"
+
+    def __init__(self, selection: DefinitionSelection, pattern_path: Sequence[str | int], field_path: Sequence[str], value: Any) -> None:
+        self.pattern_path = tuple(pattern_path)
+        self.field_path = tuple(str(part) for part in field_path)
+        super().__init__(selection, self.pattern_path + self.field_path)
+        self.value = _copy(value)
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        pattern = _collection_at(model.mapping, self.pattern_path)
+        if not isinstance(pattern, Mapping):
+            return ValidationResult.error("The selected defense pattern no longer exists.")
+        field = _defense_field_for_path(pattern, self.field_path)
+        if field is None:
+            return ValidationResult.error(f"Field {'.'.join(self.field_path)!r} is not editor-supported for this pattern.")
+        if field.editor_hint == "read_only" or field.field.read_only:
+            return ValidationResult.error(f"{field.field.display_name} is read-only in the dedicated editor.")
+        if not _defense_type_valid(self.value, field.field.type):
+            return ValidationResult.error(f"{field.field.display_name} has an invalid value type.")
+        if isinstance(self.value, (int, float)) and not isinstance(self.value, bool):
+            if field.field.minimum is not None and self.value < field.field.minimum:
+                return ValidationResult.error(f"{field.field.display_name} must be at least {field.field.minimum}.")
+            if field.field.maximum is not None and self.value > field.field.maximum:
+                return ValidationResult.error(f"{field.field.display_name} must be at most {field.field.maximum}.")
+        if field.field.allowed_values and self.value not in field.field.allowed_values:
+            return ValidationResult.error(f"{field.field.display_name} is not an allowed value.")
+        candidate = _copy(dict(pattern))
+        _set_nested_value(candidate, self.field_path, self.value)
+        return DefensePatternCommand._candidate_valid(candidate)
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        pattern = _collection_at(working_copy.mapping, self.pattern_path)
+        if not isinstance(pattern, dict):
+            raise TypeError("Defense pattern must be a mapping")
+        self.old_authored_value = _copy(_get_path(pattern, self.field_path))
+        _set_nested_value(pattern, self.field_path, self.value)
+
+
+class SetDefensePatternTypeCommand(EditCommand):
+    operation = "set_defense_pattern_type"
+
+    def __init__(self, selection: DefinitionSelection, pattern_path: Sequence[str | int], type_name: str) -> None:
+        self.pattern_path = tuple(pattern_path)
+        self.type_name = str(type_name)
+        super().__init__(selection, self.pattern_path + ("type",))
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        from engine.battle.defense_metadata import defense_pattern_editor_spec, minimal_defense_pattern
+
+        if defense_pattern_editor_spec(self.type_name) is None or not defense_pattern_editor_spec(self.type_name).supported:  # type: ignore[union-attr]
+            return ValidationResult.error(f"Unknown or unsupported defense pattern type {self.type_name!r}.")
+        if not isinstance(_collection_at(model.mapping, self.pattern_path), Mapping):
+            return ValidationResult.error("The selected defense pattern no longer exists.")
+        return self._candidate_valid(minimal_defense_pattern(self.type_name))
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        old = _collection_at(working_copy.mapping, self.pattern_path)
+        if not isinstance(old, Mapping):
+            raise TypeError("Defense pattern must be a mapping")
+        replacement = {"type": self.type_name}
+        if isinstance(old.get("id"), str):
+            replacement["id"] = old["id"]
+        for key in ("start", "duration"):
+            if key in old:
+                replacement[key] = _copy(old[key])
+        parent = _get_path(working_copy.mapping, self.pattern_path[:-1])
+        if not isinstance(parent, list) or not isinstance(self.pattern_path[-1], int):
+            raise TypeError("Defense pattern path must address a list entry")
+        parent[self.pattern_path[-1]] = replacement
+
+
+class InsertDefenseSequenceCommand(EditCommand):
+    operation = "insert_defense_sequence"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int], sequence: Mapping[str, Any]) -> None:
+        super().__init__(selection, tuple(collection_path))
+        self.collection_path = tuple(collection_path)
+        self.sequence = _copy(dict(sequence))
+        self.index: int | None = None
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        from engine.battle.defense import DefenseConfigError, validate_defense_sequence
+        if not isinstance(self.sequence.get("id"), str) or not self.sequence["id"]:
+            return ValidationResult.error("A defense sequence requires a non-empty id.")
+        try:
+            validate_defense_sequence(self.sequence, "defense_sequence")
+        except (DefenseConfigError, TypeError, ValueError) as exc:
+            return ValidationResult.error(str(exc))
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        collection = _defense_sequence_list(working_copy.mapping, self.collection_path)
+        if _collection_at(working_copy.mapping, self.collection_path) is MISSING:
+            parent, key = _ensure_collection_parent(working_copy.mapping, self.collection_path)
+            parent[key] = collection
+        ids = {entry.get("id") for entry in collection if isinstance(entry, Mapping)}
+        base = str(self.sequence.get("id") or "defense")
+        identifier = base
+        suffix = 2
+        while identifier in ids:
+            identifier = f"{base}_{suffix}"
+            suffix += 1
+        self.sequence["id"] = identifier
+        collection.append(_copy(self.sequence))
+        self.index = len(collection) - 1
+
+
+class RemoveDefenseSequenceCommand(EditCommand):
+    operation = "remove_defense_sequence"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int], index: int) -> None:
+        super().__init__(selection, tuple(collection_path) + (int(index),))
+        self.collection_path = tuple(collection_path)
+        self.index = int(index)
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        try:
+            sequence = _defense_sequence_list(model.mapping, self.collection_path)[self.index]
+        except (IndexError, TypeError) as exc:
+            return ValidationResult.error(str(exc))
+        identifier = sequence.get("id") if isinstance(sequence, Mapping) else None
+        if isinstance(identifier, str):
+            references = _defense_references(model.mapping, identifier, skip_prefix=self.collection_path + (self.index,))
+            if references:
+                return ValidationResult.error(
+                    f"Cannot delete referenced defense sequence {identifier!r}: " + ", ".join(references)
+                )
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        collection = _defense_sequence_list(working_copy.mapping, self.collection_path)
+        self.removed_sequence = _copy(collection.pop(self.index))
+
+
+class MoveDefenseSequenceCommand(EditCommand):
+    operation = "move_defense_sequence"
+
+    def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int], index: int, new_index: int) -> None:
+        super().__init__(selection, tuple(collection_path) + (int(index),))
+        self.collection_path = tuple(collection_path)
+        self.index = int(index)
+        self.new_index = int(new_index)
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        collection = _defense_sequence_list(model.mapping, self.collection_path)
+        if not 0 <= self.index < len(collection):
+            return ValidationResult.error("The selected defense sequence no longer exists.")
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        collection = _defense_sequence_list(working_copy.mapping, self.collection_path)
+        destination = max(0, min(self.new_index, len(collection) - 1))
+        value = collection.pop(self.index)
+        collection.insert(destination, value)
+        self.new_index = destination
+
+
 __all__ = [
     "DefinitionWorkingCopy",
+    "SourceDocumentWorkingCopy",
     "EditCommand",
     "EditValidationError",
     "StructuralEditCommand",
@@ -1675,6 +2361,24 @@ __all__ = [
     "PropertyPath",
     "RemovePropertyCommand",
     "SetPropertyCommand",
+    "SetSourcePropertyCommand",
     "SetGeometryCommand",
+    "CombatMoveCommand",
+    "AddDifficultyLevelCommand",
+    "DeleteDifficultyLevelCommand",
+    "DuplicateDifficultyLevelCommand",
+    "ReplaceQTETypeCommand",
+    "SetCombatMoveFieldCommand",
+    "DefensePatternCommand",
+    "InsertDefensePatternCommand",
+    "DuplicateDefensePatternCommand",
+    "RemoveDefensePatternCommand",
+    "MoveDefensePatternCommand",
+    "SetDefensePatternParameterCommand",
+    "SetDefensePatternTypeCommand",
+    "InsertDefenseSequenceCommand",
+    "RemoveDefenseSequenceCommand",
+    "MoveDefenseSequenceCommand",
+    "defense_pattern_references",
     "ValidationResult",
 ]

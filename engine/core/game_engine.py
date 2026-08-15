@@ -32,9 +32,11 @@ from engine.core.exploration import (
 from engine.core.game_over import GameOverPresentation, GameOverStage
 from engine.core.game_state import GameState
 from engine.core.developer_test import (
+    BattleTestConfiguration,
     DeveloperTestConfigError,
     SceneTestConfiguration,
     apply_developer_test_configuration,
+    load_developer_test_configuration,
 )
 from engine.core.inventory import InventoryActionError, InventoryGrid, InventoryLayout, InventoryService
 from engine.core.story_interpreter import StoryInterpreter, Transition
@@ -68,8 +70,9 @@ class GameEngine:
         *,
         developer_mode: bool = False,
         start_scene_override: str | None = None,
+        start_battle_override: str | None = None,
         developer_test_config_path: str | Path | None = None,
-        developer_test_config: SceneTestConfiguration | None = None,
+        developer_test_config: SceneTestConfiguration | BattleTestConfiguration | None = None,
     ):
         self.story_dir = Path(story_dir)
         self.assets = AssetLoader(story_dir, shared_dir)
@@ -105,7 +108,7 @@ class GameEngine:
         if developer_test_config_path is not None:
             if not developer_mode:
                 raise DeveloperTestConfigError("Developer test configuration requires developer mode")
-            developer_test_config = SceneTestConfiguration.from_json(developer_test_config_path)
+            developer_test_config = load_developer_test_configuration(developer_test_config_path)
         if developer_test_config is not None:
             if not developer_mode:
                 raise DeveloperTestConfigError("Developer test configuration requires developer mode")
@@ -114,11 +117,29 @@ class GameEngine:
                 developer_test_config,
                 known_items=self.items,
             )
+        config_battle_id = (
+            developer_test_config.battle_id
+            if isinstance(developer_test_config, BattleTestConfiguration)
+            else None
+        )
+        config_scene_id = (
+            developer_test_config.scene_id
+            if developer_test_config is not None
+            else None
+        )
+        if (start_scene_override is not None or config_scene_id is not None) and (
+            start_battle_override is not None or config_battle_id is not None
+        ):
+            raise DeveloperTestConfigError("Developer test startup cannot specify both a scene and a battle")
+        if start_battle_override is not None and config_battle_id is not None and start_battle_override != config_battle_id:
+            raise DeveloperTestConfigError("--battle does not match the battle in the developer test configuration")
+        self._developer_battle_id = start_battle_override or config_battle_id
         # This is intentionally a state-startup override rather than a
         # mutation of the authored manifest.  All other fresh-game values
         # still come from the normal manifest/profile initialization path.
         self.developer_mode = bool(
-            developer_mode or start_scene_override is not None or developer_test_config is not None
+            developer_mode or start_scene_override is not None or self._developer_battle_id is not None
+            or developer_test_config is not None
         )
         selected_scene = start_scene_override
         if selected_scene is None and developer_test_config is not None:
@@ -188,7 +209,23 @@ class GameEngine:
     def run(self) -> None:
         """Run a capped event loop. No terminal output or stdin is involved."""
         try:
-            self._enter_scene(self.state.current_scene)
+            if self._developer_battle_id is not None:
+                # Load a renderer context without executing scene entry
+                # actions.  Direct battle testing must begin from the fresh
+                # profile/manifest state plus explicit overrides, then enter
+                # combat through the same transition path used by gameplay.
+                self._prepare_battle_test_context()
+                self._start_battle(Transition(
+                    kind="battle",
+                    battle_id=self._developer_battle_id,
+                ))
+                # A direct test has no source choice to supply outcome
+                # destinations: victory/escape return to this fresh test
+                # scene, while defeat follows the battle's own completion
+                # policy and exits when no destination exists.
+                self._render()
+            else:
+                self._enter_scene(self.state.current_scene)
             while self.running:
                 changed = False
                 for event in self.renderer.events():
@@ -222,6 +259,17 @@ class GameEngine:
         finally:
             self.audio.stop_music()
             self.renderer.shutdown()
+
+    def _prepare_battle_test_context(self) -> None:
+        """Provide the normal scene/render context without scene side effects."""
+
+        self.scene = self._load_scene_definition(self.state.current_scene)
+        self.choices = []
+        self.selected = 0
+        self.message = None
+        self.ending = False
+        self._pending_selection = None
+        self._reset_exploration_state()
 
     def _enter_scene(self, scene_id: str) -> None:
         self.game_over = None

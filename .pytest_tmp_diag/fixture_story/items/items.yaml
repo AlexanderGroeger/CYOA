@@ -1,0 +1,5 @@
+intro:
+  name: Intro Token
+  type: key
+  future_item_extension:
+    preserves: true

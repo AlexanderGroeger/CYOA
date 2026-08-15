@@ -12,6 +12,9 @@ from .test_state import TestStateDialog
 from .condition_editor import ConditionEditorWidget
 from .asset_browser import AssetBrowserDialog, AssetBrowserWidget
 from .scene_graph import SceneGraphCanvas, SceneGraphEdgeItem, SceneGraphNodeItem, SceneGraphWidget
+from .battle_editor import BattleEditorWidget
+from .combat_move_editor import CombatMoveEditorWidget
+from .defense_pattern_editor import DefensePatternEditorWidget
 
 __all__ = [
     "AssetPathEditor",
@@ -35,4 +38,7 @@ __all__ = [
     "SceneGraphEdgeItem",
     "SceneGraphNodeItem",
     "SceneGraphWidget",
+    "BattleEditorWidget",
+    "CombatMoveEditorWidget",
+    "DefensePatternEditorWidget",
 ]

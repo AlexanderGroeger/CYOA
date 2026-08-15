@@ -1,0 +1,13 @@
+id: intro
+text: Welcome.
+future_scene_extension:
+  preserves: true
+actions:
+  - add_item: intro
+choices:
+  - text: Continue
+    goto: ending
+  - text: Fight
+    battle: intro
+  - text: Chance
+    random_event: intro

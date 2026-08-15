@@ -1,0 +1,4 @@
+frames: [frame.txt]
+frame_delay_ms: 100
+loop: true
+future_animation_extension: {preserves: true}

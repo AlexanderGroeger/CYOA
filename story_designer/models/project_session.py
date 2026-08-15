@@ -53,6 +53,7 @@ class ProjectSession:
         self.selection: DefinitionSelection | None = None
         self.diagnostics = Diagnostics()
         self._working_copies: dict[DefinitionSelection, Any] = {}
+        self._source_working_copies: dict[str, Any] = {}
         self._history: list[Any] = []
         self._redo_history: list[Any] = []
         self._source_baseline = {}
@@ -61,7 +62,7 @@ class ProjectSession:
     def dirty(self) -> bool:
         """Whether any editor-owned working copy differs from its snapshot."""
 
-        return any(copy.is_dirty for copy in self._working_copies.values())
+        return any(copy.is_dirty for copy in self._working_copies.values()) or any(copy.is_dirty for copy in self._source_working_copies.values())
 
     @property
     def is_dirty(self) -> bool:
@@ -135,6 +136,7 @@ class ProjectSession:
         # Reload is intentionally discard-and-replace.  Callers can inspect
         # ``dirty`` before invoking it and provide a save-changes policy later.
         self._working_copies.clear()
+        self._source_working_copies.clear()
         self._history.clear()
         self._redo_history.clear()
         self._source_baseline = capture_source_baseline(root, project.source_documents.keys())
@@ -157,6 +159,7 @@ class ProjectSession:
         self.shared_assets_root = None
         self.selection = None
         self._working_copies.clear()
+        self._source_working_copies.clear()
         self._history.clear()
         self._redo_history.clear()
         self._source_baseline = {}
@@ -249,6 +252,28 @@ class ProjectSession:
         copy = self.working_copy(selection)
         return copy.to_mapping() if copy is not None else None
 
+    def source_working_copy(self, relative_path: str):
+        """Return a working copy for a complete file-level source document."""
+
+        from .editing import SourceDocumentWorkingCopy
+
+        if self.project is None:
+            return None
+        key = str(relative_path).replace("\\", "/")
+        existing = self._source_working_copies.get(key)
+        if existing is not None:
+            return existing
+        document = self.semantic_documents(include_source_copies=False).get(key)
+        if document is None:
+            return None
+        existing = SourceDocumentWorkingCopy.from_mapping(key, document)
+        self._source_working_copies[key] = existing
+        return existing
+
+    def source_working_mapping(self, relative_path: str) -> Any | None:
+        copy = self.source_working_copy(relative_path)
+        return copy.to_mapping() if copy is not None else None
+
     semantic_definition = working_mapping
 
     def apply_command(self, command: Any) -> Any:
@@ -258,14 +283,24 @@ class ProjectSession:
 
         if self.project is None:
             raise RuntimeError("No story is open")
-        copy = self.working_copy(command.selection)
-        model = self.property_model(command.selection)
-        if copy is None or model is None:
-            raise KeyError(f"Unknown definition selection: {command.selection!r}")
-        validation = command.validate(model) if hasattr(command, "validate") else model.validate_command(command)
+        source_path = getattr(command, "source_path", None)
+        if source_path is not None:
+            copy = self.source_working_copy(source_path)
+            model = None
+            if copy is None:
+                raise KeyError(f"Unknown source document: {source_path!r}")
+            validation = command.validate_source(copy.mapping) if hasattr(command, "validate_source") else command.validate(None) if hasattr(command, "validate") else None
+        else:
+            copy = self.working_copy(command.selection)
+            model = self.property_model(command.selection)
+            if copy is None or model is None:
+                raise KeyError(f"Unknown definition selection: {command.selection!r}")
+            validation = command.validate(model) if hasattr(command, "validate") else model.validate_command(command)
         if not validation.valid:
             raise EditValidationError(command.path, validation.message)
         command.apply(copy)
+        if source_path is None:
+            self._rebase_source_working_copies()
         self._history.append(command)
         self._redo_history.clear()
         return command
@@ -276,7 +311,7 @@ class ProjectSession:
         if not self._history:
             return None
         command = self._history.pop()
-        copy = self.working_copy(command.selection)
+        copy = self._command_copy(command)
         if copy is None:
             self._history.append(command)
             raise KeyError(f"Unknown definition selection: {command.selection!r}")
@@ -290,13 +325,60 @@ class ProjectSession:
         if not self._redo_history:
             return None
         command = self._redo_history.pop()
-        copy = self.working_copy(command.selection)
+        copy = self._command_copy(command)
         if copy is None:
             self._redo_history.append(command)
             raise KeyError(f"Unknown definition selection: {command.selection!r}")
         command.apply(copy)
         self._history.append(command)
         return command
+
+    def _command_copy(self, command: Any):
+        source_path = getattr(command, "source_path", None)
+        return self.source_working_copy(source_path) if source_path is not None else self.working_copy(command.selection)
+
+    def _base_semantic_documents(self) -> dict[str, Any]:
+        """Serialize Core plus definition working copies, excluding file copies."""
+
+        if self.project is None:
+            return {}
+        from engine.story_core.serialization import serialize_project
+
+        documents = serialize_project(self.project)
+        for selection, copy in self._working_copies.items():
+            if not copy.is_dirty:
+                continue
+            definition = self.definition(selection)
+            if definition is None:
+                continue
+            source = getattr(definition, "source", None)
+            if selection.kind is ContentKind.AUDIO:
+                source = self.project.story_root / "audio.yaml"
+            if source is None:
+                continue
+            try:
+                relative = Path(source).relative_to(self.project.story_root).as_posix()
+            except ValueError:
+                continue
+            if relative not in documents:
+                documents[relative] = copy.to_mapping()
+                continue
+            field_path = tuple(getattr(definition, "field_path", ()))
+            if not field_path:
+                documents[relative] = copy.to_mapping()
+            else:
+                _replace_path(documents[relative], field_path, copy.to_mapping())
+        return documents
+
+    def _rebase_source_working_copies(self) -> None:
+        """Keep file-level working documents in sync with sibling edits."""
+
+        if not self._source_working_copies:
+            return
+        base = self._base_semantic_documents()
+        for key, copy in self._source_working_copies.items():
+            if key in base:
+                copy.rebase(base[key])
 
     def revert_definition(self, selection: DefinitionSelection | None = None) -> bool:
         selection = self.selection if selection is None else selection
@@ -312,6 +394,8 @@ class ProjectSession:
 
     def revert_all(self) -> None:
         for copy in self._working_copies.values():
+            copy.revert()
+        for copy in self._source_working_copies.values():
             copy.revert()
         self._history.clear()
         self._redo_history.clear()
@@ -331,6 +415,7 @@ class ProjectSession:
                 result.add(Path(source).relative_to(self.story_root).as_posix())
             except ValueError as exc:
                 raise PersistenceError(f"Cannot save definition {selection.id!r} outside the story root") from exc
+        result.update(key for key, copy in self._source_working_copies.items() if copy.is_dirty)
         return frozenset(result)
 
     def save(self, *, overwrite_external: bool = False, allow_validation_errors: bool = False) -> bool:
@@ -407,38 +492,14 @@ class ProjectSession:
             return True
         return self.revert_definition(selection)
 
-    def semantic_documents(self) -> dict[str, Any]:
+    def semantic_documents(self, *, include_source_copies: bool = True) -> dict[str, Any]:
         """Return project documents with pending edits applied in memory only."""
-
-        if self.project is None:
-            return {}
-        from engine.story_core.serialization import serialize_project
-
-        documents = serialize_project(self.project)
-        for selection, copy in self._working_copies.items():
-            if not copy.is_dirty:
-                continue
-            definition = self.definition(selection)
-            if definition is None:
-                continue
-            source = getattr(definition, "source", None)
-            if selection.kind is ContentKind.AUDIO:
-                source = self.project.story_root / "audio.yaml"
-            if source is None:
-                continue
-            try:
-                relative = Path(source).relative_to(self.project.story_root).as_posix()
-            except ValueError:
-                continue
-            if relative not in documents:
-                documents[relative] = copy.to_mapping()
-                continue
-            field_path = tuple(getattr(definition, "field_path", ()))
-            if not field_path:
-                documents[relative] = copy.to_mapping()
-            else:
-                document = documents[relative]
-                _replace_path(document, field_path, copy.to_mapping())
+        documents = self._base_semantic_documents()
+        if include_source_copies:
+            for key, copy in self._source_working_copies.items():
+                if copy.is_dirty:
+                    copy.rebase(documents.get(key, copy.original_mapping))
+                    documents[key] = copy.to_mapping()
         return documents
 
     updated_documents = semantic_documents
