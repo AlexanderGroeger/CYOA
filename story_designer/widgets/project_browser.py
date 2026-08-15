@@ -57,8 +57,10 @@ class ProjectBrowser(QWidget):
 
     def set_project(self, project: StoryProject | None) -> None:
         self._project = project
+        blocker = QSignalBlocker(self.tree)
         self.tree.clear()
         if project is None:
+            del blocker
             return
 
         root = QTreeWidgetItem([project.manifest.title or project.manifest.id, ""])
@@ -87,6 +89,7 @@ class ProjectBrowser(QWidget):
                 category.addChild(item)
             category.setExpanded(True)
         root.setExpanded(True)
+        del blocker
 
     def select(self, selection: DefinitionSelection | None) -> bool:
         """Select a matching tree item, including duplicate-source entries."""

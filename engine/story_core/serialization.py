@@ -96,6 +96,12 @@ def dump_project_yaml(project: Any, *, sort_keys: bool = False) -> dict[str, str
     }
 
 
+def dump_document_yaml(document: Any, *, sort_keys: bool = False) -> str:
+    """Render one already-semantic source document as YAML text."""
+
+    return yaml.safe_dump(thaw_value(document), allow_unicode=True, sort_keys=sort_keys)
+
+
 def _fallback_project_documents(project: Any) -> dict[str, Any]:
     """Best-effort serializer for manually constructed project-like values."""
 
@@ -164,6 +170,7 @@ def _safe_relative_path(value: str | Path) -> str:
 
 __all__ = [
     "dump_project_yaml",
+    "dump_document_yaml",
     "semantic_equivalent",
     "serialize_definition",
     "serialize_project",

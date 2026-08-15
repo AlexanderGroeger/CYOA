@@ -53,7 +53,7 @@ class WorkspaceWidget(QWidget):
         self.overview.setPlainText(
             f"Source: {getattr(definition, 'source', selection.source)}\n\n"
             f"Authored fields: {len(authored) if hasattr(authored, '__len__') else 'n/a'}\n\n"
-            "This workspace is read-only in Step 4. Future editors can add tabs here."
+            "Edit supported properties in the Inspector. Changes are kept in memory until persistence is added."
         )
 
 

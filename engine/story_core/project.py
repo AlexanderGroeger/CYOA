@@ -461,7 +461,9 @@ def _load_moves(
             else:
                 skill_progression = dict(value)
                 progression_source = path
-        entries: Any = data.get("moves", []) if isinstance(data, Mapping) and "moves" in data else data
+        wrapped_moves = isinstance(data, Mapping) and "moves" in data
+        wrapped_move_mapping = wrapped_moves and isinstance(data.get("moves"), Mapping)
+        entries: Any = data.get("moves", []) if wrapped_moves else data
         if isinstance(entries, Mapping) and "id" in entries:
             entries = [entries]
         if not isinstance(entries, list):
@@ -476,7 +478,17 @@ def _load_moves(
                 diagnostics.error("invalid_move_id", "Move entries require a non-empty string id", source=path, path=("moves", entry_index, "id"))
                 continue
             try:
-                definition = MoveDefinition.from_mapping(raw, path, identifier=move_id, field_path=("moves", entry_index))
+                if wrapped_move_mapping:
+                    field_path = ("moves",)
+                elif wrapped_moves:
+                    field_path = ("moves", entry_index)
+                elif isinstance(data, list):
+                    field_path = (entry_index,)
+                else:
+                    # A single direct move mapping is the complete source
+                    # document, not an entry below a synthetic ``moves`` key.
+                    field_path = ()
+                definition = MoveDefinition.from_mapping(raw, path, identifier=move_id, field_path=field_path)
             except (TypeError, ValueError) as exc:
                 diagnostics.error("invalid_move_definition", str(exc), source=path, path=("moves", entry_index))
                 continue

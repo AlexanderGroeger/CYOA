@@ -68,6 +68,7 @@ from .models import (
 from .project import ProjectSymbols, StoryProject, StoryProjectLoadError, load_story_project
 from .schema import FieldSpec, Schema, SchemaRegistry, TypeSpec, default_schema_registry
 from .serialization import (
+    dump_document_yaml,
     dump_project_yaml,
     semantic_equivalent,
     serialize_definition,
@@ -96,6 +97,7 @@ __all__ = [
     "Diagnostics",
     "DiagnosticSeverity",
     "dump_project_yaml",
+    "dump_document_yaml",
     "EventPoolDefinition",
     "EventPoolReference",
     "evaluate_condition",

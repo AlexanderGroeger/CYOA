@@ -1,0 +1,618 @@
+"""Qt-independent editing primitives for the Story Designer.
+
+The Core project is an immutable snapshot.  This module owns the mutable
+semantic mapping used by the Designer until a later phase deliberately turns
+it into serialized source documents.  It intentionally knows about Core's
+schema metadata, but has no Qt dependency.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
+from dataclasses import dataclass, field
+from typing import Any
+
+from engine.story_core import Schema, StoryProject, TypeSpec
+from engine.story_core.schema import FieldSpec, MISSING
+
+from .project_session import DefinitionSelection
+
+
+PropertyPath = tuple[str | int, ...]
+
+
+def _copy(value: Any) -> Any:
+    """Copy an authored/editor value without leaking mutable containers."""
+
+    if value is MISSING:
+        return MISSING
+    return deepcopy(value)
+
+
+def _title(value: str | int) -> str:
+    return str(value).replace("_", " ").replace("-", " ").title()
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    """The small validation result exposed to future input widgets."""
+
+    valid: bool
+    message: str = ""
+
+    @classmethod
+    def ok(cls) -> "ValidationResult":
+        return cls(True, "")
+
+    @classmethod
+    def error(cls, message: str) -> "ValidationResult":
+        return cls(False, message)
+
+
+@dataclass(frozen=True)
+class PropertyDescriptor:
+    """Schema-derived metadata and values for one editable property path."""
+
+    selection: DefinitionSelection
+    path: PropertyPath
+    key: str | int
+    display_name: str
+    description: str
+    type_spec: TypeSpec | None
+    required: bool
+    default: Any = MISSING
+    authored_value: Any = MISSING
+    effective_value: Any = MISSING
+    is_authored: bool = False
+    is_editable: bool = True
+    supported: bool = True
+    unsupported_reason: str | None = None
+    minimum: int | float | None = None
+    maximum: int | float | None = None
+    allowed_values: tuple[Any, ...] = ()
+    reference_target: str | None = None
+    reference_candidates: tuple[str, ...] = ()
+    asset_kind: str | None = None
+    nullable: bool = False
+    field_spec: FieldSpec | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def type(self) -> TypeSpec | None:
+        """Convenient alias for widget factories."""
+
+        return self.type_spec
+
+    @property
+    def has_default(self) -> bool:
+        return self.default is not MISSING
+
+    @property
+    def editable(self) -> bool:
+        return self.is_editable
+
+    @property
+    def is_supported(self) -> bool:
+        return self.supported
+
+
+@dataclass
+class DefinitionWorkingCopy:
+    """One editor-owned semantic mapping and its loaded baseline."""
+
+    selection: DefinitionSelection
+    schema: Schema | None
+    original_mapping: dict[str, Any]
+    mapping: dict[str, Any]
+
+    @classmethod
+    def from_mapping(
+        cls,
+        selection: DefinitionSelection,
+        mapping: Mapping[str, Any] | None,
+        schema: Schema | None,
+    ) -> "DefinitionWorkingCopy":
+        original = _copy(dict(mapping or {}))
+        return cls(selection, schema, original, _copy(original))
+
+    @property
+    def authored_mapping(self) -> dict[str, Any]:
+        return self.mapping
+
+    @property
+    def is_dirty(self) -> bool:
+        return self.mapping != self.original_mapping
+
+    def to_mapping(self) -> dict[str, Any]:
+        return _copy(self.mapping)
+
+    def original(self) -> dict[str, Any]:
+        return _copy(self.original_mapping)
+
+    def value(self, path: Sequence[str | int], default: Any = MISSING) -> Any:
+        return _get_path(self.mapping, tuple(path), default=default, schema=self.schema)
+
+    def original_value(self, path: Sequence[str | int], default: Any = MISSING) -> Any:
+        return _get_path(self.original_mapping, tuple(path), default=default, schema=self.schema)
+
+    def set_value(self, path: Sequence[str | int], value: Any) -> None:
+        _set_path(self.mapping, tuple(path), _copy(value), schema=self.schema)
+
+    def remove_value(self, path: Sequence[str | int]) -> None:
+        _remove_path(self.mapping, tuple(path), schema=self.schema)
+
+    def revert(self) -> None:
+        self.mapping = _copy(self.original_mapping)
+
+
+class EditValidationError(ValueError):
+    """Raised when an editing command fails schema-level validation."""
+
+    def __init__(self, path: PropertyPath, message: str) -> None:
+        self.path = tuple(path)
+        self.message = str(message)
+        super().__init__(f"{_path_text(self.path)}: {self.message}")
+
+
+class PropertyModel:
+    """Adapter from a working mapping and Core schema to property metadata."""
+
+    _SUPPORTED_KINDS = {
+        "string", "multiline_string", "integer", "float", "number", "boolean",
+        "enum", "reference", "asset", "object", "list", "mapping", "condition",
+        "union", "discriminated_union",
+    }
+
+    def __init__(
+        self,
+        project: StoryProject,
+        selection: DefinitionSelection,
+        working_copy: DefinitionWorkingCopy,
+    ) -> None:
+        self.project = project
+        self.selection = selection
+        self.working_copy = working_copy
+        self.schema = working_copy.schema
+
+    @property
+    def mapping(self) -> dict[str, Any]:
+        return self.working_copy.mapping
+
+    def descriptor(self, path: Sequence[str | int]) -> PropertyDescriptor:
+        property_path = tuple(path)
+        if not property_path:
+            raise KeyError("A property path cannot be empty")
+        field_spec, type_spec = self._spec_for_path(property_path)
+        authored = self.working_copy.value(property_path)
+        effective = self._effective_value(property_path, field_spec)
+        default = field_spec.default_value() if field_spec is not None and field_spec.has_default else MISSING
+        if len(property_path) > 1 and field_spec is None:
+            nested_field = self._nested_field_spec(property_path)
+            if nested_field is not None:
+                field_spec = nested_field
+                default = nested_field.default_value() if nested_field.has_default else MISSING
+        supported, reason = self._support(type_spec)
+        candidates = self._reference_candidates(type_spec, field_spec)
+        reference_target = self._reference_target(type_spec, field_spec)
+        asset_kind = self._asset_kind(type_spec, field_spec)
+        key = property_path[-1]
+        description = field_spec.description if field_spec is not None else ""
+        read_only = bool(field_spec.read_only) if field_spec is not None else False
+        return PropertyDescriptor(
+            selection=self.selection,
+            path=property_path,
+            key=key,
+            display_name=field_spec.display_name if field_spec is not None else _title(key),
+            description=description,
+            type_spec=type_spec,
+            required=bool(field_spec.required) if field_spec is not None else False,
+            default=_copy(default),
+            authored_value=_copy(authored),
+            effective_value=_copy(effective),
+            is_authored=authored is not MISSING,
+            is_editable=not read_only and supported,
+            supported=supported,
+            unsupported_reason=reason,
+            minimum=field_spec.minimum if field_spec is not None else None,
+            maximum=field_spec.maximum if field_spec is not None else None,
+            allowed_values=tuple(_copy(value) for value in (field_spec.allowed_values if field_spec is not None else ())),
+            reference_target=reference_target,
+            reference_candidates=candidates,
+            asset_kind=asset_kind,
+            nullable=bool(type_spec.nullable) if type_spec is not None else False,
+            field_spec=field_spec,
+        )
+
+    property = descriptor
+
+    def properties(self, *, include_nested: bool = True) -> tuple[PropertyDescriptor, ...]:
+        """Return schema fields, optionally followed by existing nested paths."""
+
+        if self.schema is None:
+            return ()
+        result: list[PropertyDescriptor] = []
+        for field_spec in self.schema.fields:
+            if field_spec.is_applicable(self._effective_mapping()):
+                path = (field_spec.key,)
+                result.append(self.descriptor(path))
+                if include_nested:
+                    self._append_nested(result, path, self._path_value(path), field_spec.type, depth=0)
+        return tuple(result)
+
+    fields = properties
+
+    def validate(self, path: Sequence[str | int], value: Any = MISSING, *, removing: bool = False) -> ValidationResult:
+        property_path = tuple(path)
+        descriptor = self.descriptor(property_path)
+        if not descriptor.is_editable:
+            return ValidationResult.error("This property is read-only.")
+        if not descriptor.supported:
+            return ValidationResult.error(descriptor.unsupported_reason or "This property type is not editable.")
+        field_spec, type_spec = self._spec_for_path(property_path)
+        if removing or value is MISSING:
+            if descriptor.required:
+                return ValidationResult.error("A required authored value cannot be removed.")
+            return ValidationResult.ok()
+        if type_spec is None:
+            return ValidationResult.ok()
+        result = _validate_type(value, type_spec)
+        if not result.valid:
+            return result
+        if field_spec is not None and isinstance(value, (int, float)) and not isinstance(value, bool):
+            if field_spec.minimum is not None and value < field_spec.minimum:
+                return ValidationResult.error(f"Value must be at least {field_spec.minimum}.")
+            if field_spec.maximum is not None and value > field_spec.maximum:
+                return ValidationResult.error(f"Value must be at most {field_spec.maximum}.")
+        if field_spec is not None and field_spec.allowed_values and value not in field_spec.allowed_values:
+            return ValidationResult.error("Value is not one of the allowed values.")
+        return ValidationResult.ok()
+
+    validate_value = validate
+
+    def validate_command(self, command: "EditCommand") -> ValidationResult:
+        if isinstance(command, RemovePropertyCommand):
+            return self.validate(command.path, removing=True)
+        return self.validate(command.path, command.value)
+
+    def _effective_mapping(self) -> dict[str, Any]:
+        result = _copy(self.mapping)
+        if self.schema is not None:
+            for field_spec in self.schema.fields:
+                if field_spec.key not in result:
+                    for alias in field_spec.aliases:
+                        if alias in result:
+                            result[field_spec.key] = result[alias]
+                            break
+        return result
+
+    def _path_value(self, path: PropertyPath) -> Any:
+        return self.working_copy.value(path)
+
+    def _effective_value(self, path: PropertyPath, field_spec: FieldSpec | None) -> Any:
+        value = self.working_copy.value(path)
+        if value is not MISSING:
+            return value
+        if len(path) == 1 and field_spec is not None and field_spec.has_default:
+            return field_spec.default_value()
+        if len(path) > 1:
+            root_spec = self.schema.field(str(path[0])) if self.schema is not None and isinstance(path[0], str) else None
+            root_value = self.working_copy.value((path[0],))
+            if root_value is MISSING and root_spec is not None and root_spec.has_default:
+                root_value = root_spec.default_value()
+            if root_value is not MISSING:
+                return _get_path(root_value, path[1:], default=MISSING)
+        return MISSING
+
+    def _spec_for_path(self, path: PropertyPath) -> tuple[FieldSpec | None, TypeSpec | None]:
+        if not path or self.schema is None or not isinstance(path[0], str):
+            return None, None
+        field_spec = self.schema.field(path[0])
+        if field_spec is None:
+            return None, None
+        type_spec: TypeSpec | None = field_spec.type
+        nested_field = field_spec
+        for component in path[1:]:
+            nested_field = self._field_for_nested(nested_field, type_spec, component)
+            type_spec = self._child_type(type_spec, component)
+        return (field_spec if len(path) == 1 else nested_field), type_spec
+
+    def _nested_field_spec(self, path: PropertyPath) -> FieldSpec | None:
+        field_spec, _ = self._spec_for_path(path)
+        return field_spec
+
+    def _field_for_nested(self, parent: FieldSpec | None, type_spec: TypeSpec | None, component: str | int) -> FieldSpec | None:
+        if type_spec is None or not isinstance(component, str):
+            return None
+        if type_spec.object_schema:
+            schema = self.project.schema_registry.get(type_spec.object_schema) if self.project.schema_registry else None
+            return schema.field(component) if schema is not None else None
+        return None
+
+    def _child_type(self, type_spec: TypeSpec | None, component: str | int) -> TypeSpec | None:
+        if type_spec is None:
+            return None
+        if type_spec.kind == "mapping":
+            return type_spec.value_type
+        if type_spec.kind == "list":
+            return type_spec.element_type
+        if type_spec.kind == "object" and isinstance(component, str) and type_spec.object_schema and self.project.schema_registry:
+            nested_schema = self.project.schema_registry.get(type_spec.object_schema)
+            nested_field = nested_schema.field(component) if nested_schema else None
+            return nested_field.type if nested_field else None
+        if type_spec.kind in {"union", "discriminated_union"}:
+            for variant in type_spec.variants.values():
+                child = self._child_type(variant, component)
+                if child is not None:
+                    return child
+        return None
+
+    def _append_nested(
+        self,
+        result: list[PropertyDescriptor],
+        parent_path: PropertyPath,
+        value: Any,
+        type_spec: TypeSpec | None,
+        *,
+        depth: int,
+    ) -> None:
+        if depth >= 8 or type_spec is None:
+            return
+        if type_spec.kind == "object" and type_spec.object_schema and self.project.schema_registry:
+            nested_schema = self.project.schema_registry.get(type_spec.object_schema)
+            if nested_schema is None:
+                return
+            values = value if isinstance(value, Mapping) else {}
+            for field_spec in nested_schema.fields:
+                path = parent_path + (field_spec.key,)
+                result.append(self.descriptor(path))
+                if field_spec.type.kind in {"object", "mapping", "list", "union", "discriminated_union"}:
+                    self._append_nested(result, path, values.get(field_spec.key, field_spec.default_value() if field_spec.has_default else MISSING), field_spec.type, depth=depth + 1)
+        elif type_spec.kind == "mapping" and isinstance(value, Mapping) and type_spec.value_type is not None:
+            for key, child_value in value.items():
+                if isinstance(key, (str, int)):
+                    path = parent_path + (key,)
+                    result.append(self.descriptor(path))
+                    self._append_nested(result, path, child_value, type_spec.value_type, depth=depth + 1)
+        elif type_spec.kind == "list" and isinstance(value, (list, tuple)) and type_spec.element_type is not None:
+            for index, child_value in enumerate(value):
+                path = parent_path + (index,)
+                result.append(self.descriptor(path))
+                self._append_nested(result, path, child_value, type_spec.element_type, depth=depth + 1)
+        elif type_spec.kind in {"union", "discriminated_union"}:
+            for variant in type_spec.variants.values():
+                self._append_nested(result, parent_path, value, variant, depth=depth + 1)
+
+    def _support(self, type_spec: TypeSpec | None) -> tuple[bool, str | None]:
+        if type_spec is None:
+            return False, "The schema does not describe this nested property."
+        if type_spec.kind not in self._SUPPORTED_KINDS:
+            return False, f"No editor adapter exists for type {type_spec.kind!r}."
+        return True, None
+
+    def _reference_target(self, type_spec: TypeSpec | None, field_spec: FieldSpec | None) -> str | None:
+        if field_spec is not None and field_spec.reference_target:
+            return field_spec.reference_target
+        if type_spec is None:
+            return None
+        if type_spec.kind == "reference":
+            return type_spec.reference_target
+        if type_spec.element_type is not None:
+            return self._reference_target(type_spec.element_type, None)
+        return None
+
+    def _asset_kind(self, type_spec: TypeSpec | None, field_spec: FieldSpec | None) -> str | None:
+        if field_spec is not None and field_spec.asset_kind:
+            return field_spec.asset_kind
+        return type_spec.asset_kind if type_spec is not None else None
+
+    def _reference_candidates(self, type_spec: TypeSpec | None, field_spec: FieldSpec | None) -> tuple[str, ...]:
+        target = self._reference_target(type_spec, field_spec)
+        if not target or self.project.index is None:
+            return ()
+        return tuple(dict.fromkeys(reference.identifier for reference in self.project.index.references(target)))
+
+
+def _validate_type(value: Any, type_spec: TypeSpec) -> ValidationResult:
+    if value is None:
+        return ValidationResult.ok() if type_spec.nullable else ValidationResult.error("Null is not allowed.")
+    kind = type_spec.kind
+    if kind in {"string", "multiline_string", "reference", "asset"} and not isinstance(value, str):
+        return ValidationResult.error("Value must be a string.")
+    if kind == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+        return ValidationResult.error("Value must be an integer.")
+    if kind == "float" and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+        return ValidationResult.error("Value must be a number.")
+    if kind == "number" and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+        return ValidationResult.error("Value must be a number.")
+    if kind == "boolean" and not isinstance(value, bool):
+        return ValidationResult.error("Value must be a boolean.")
+    if kind == "enum" and value not in type_spec.enum_values:
+        return ValidationResult.error("Value is not one of the allowed enum values.")
+    if kind in {"object", "mapping", "discriminated_union"} and not isinstance(value, Mapping):
+        return ValidationResult.error("Value must be a mapping.")
+    if kind == "list":
+        if not isinstance(value, (list, tuple)):
+            return ValidationResult.error("Value must be a list.")
+        if type_spec.element_type is not None:
+            for index, item in enumerate(value):
+                result = _validate_type(item, type_spec.element_type)
+                if not result.valid:
+                    return ValidationResult.error(f"List entry {index}: {result.message}")
+    if kind == "mapping" and type_spec.value_type is not None:
+        for key, item in value.items() if isinstance(value, Mapping) else ():
+            result = _validate_type(item, type_spec.value_type)
+            if not result.valid:
+                return ValidationResult.error(f"Mapping entry {key!r}: {result.message}")
+    if kind == "condition" and not isinstance(value, (str, Mapping)):
+        return ValidationResult.error("Condition must be text or a mapping.")
+    if kind == "discriminated_union" and type_spec.discriminator:
+        discriminator_value = value.get(type_spec.discriminator) if isinstance(value, Mapping) else None
+        if discriminator_value is not None and type_spec.variants and str(discriminator_value) not in type_spec.variants:
+            return ValidationResult.error("Value selects an unknown union variant.")
+    if kind == "union":
+        if not any(_validate_type(value, variant).valid for variant in type_spec.variants.values()):
+            return ValidationResult.error("Value does not match any allowed type.")
+    return ValidationResult.ok()
+
+
+def _path_text(path: PropertyPath) -> str:
+    result = ""
+    for component in path:
+        if isinstance(component, int):
+            result += f"[{component}]"
+        elif result:
+            result += f".{component}"
+        else:
+            result = str(component)
+    return result
+
+
+def _actual_root_key(mapping: Mapping[str, Any], key: str, schema: Schema | None) -> str:
+    if key in mapping or schema is None:
+        return key
+    field_spec = schema.field(key)
+    if field_spec is not None:
+        for alias in field_spec.aliases:
+            if alias in mapping:
+                return alias
+        return field_spec.key
+    return key
+
+
+def _get_path(value: Any, path: PropertyPath, *, default: Any = MISSING, schema: Schema | None = None) -> Any:
+    current = value
+    for index, component in enumerate(path):
+        if index == 0 and isinstance(current, Mapping) and isinstance(component, str):
+            component = _actual_root_key(current, component, schema)
+        if isinstance(current, Mapping):
+            if component not in current:
+                return default
+            current = current[component]
+        elif isinstance(current, (list, tuple)) and isinstance(component, int) and 0 <= component < len(current):
+            current = current[component]
+        else:
+            return default
+    return current
+
+
+def _set_path(mapping: dict[str, Any], path: PropertyPath, value: Any, *, schema: Schema | None = None) -> None:
+    if not path:
+        raise KeyError("A property path cannot be empty")
+    root = path[0]
+    if not isinstance(root, str):
+        raise KeyError("A definition root property must be named by a string")
+    actual_root = _actual_root_key(mapping, root, schema)
+    if len(path) == 1:
+        mapping[actual_root] = value
+        return
+    current: Any = mapping
+    for index, component in enumerate(path[:-1]):
+        if index == 0 and isinstance(current, Mapping) and isinstance(component, str):
+            component = _actual_root_key(current, component, schema)
+        next_component = path[index + 1]
+        if isinstance(current, dict):
+            if component not in current:
+                current[component] = [] if isinstance(next_component, int) else {}
+            current = current[component]
+        elif isinstance(current, list) and isinstance(component, int) and 0 <= component < len(current):
+            current = current[component]
+        else:
+            raise KeyError(f"Cannot descend through {_path_text(path[:index + 1])}")
+    final = path[-1]
+    if isinstance(current, dict):
+        current[final] = value
+    elif isinstance(current, list) and isinstance(final, int) and 0 <= final < len(current):
+        current[final] = value
+    else:
+        raise KeyError(f"Cannot assign {_path_text(path)}")
+
+
+def _remove_path(mapping: dict[str, Any], path: PropertyPath, *, schema: Schema | None = None) -> None:
+    if not path:
+        raise KeyError("A property path cannot be empty")
+    root = path[0]
+    if not isinstance(root, str):
+        return
+    actual_root = _actual_root_key(mapping, root, schema)
+    if len(path) == 1:
+        mapping.pop(actual_root, None)
+        if schema is not None:
+            field_spec = schema.field(root)
+            if field_spec is not None:
+                for alias in field_spec.aliases:
+                    mapping.pop(alias, None)
+        return
+    parent = _get_path(mapping, path[:-1], schema=schema)
+    final = path[-1]
+    if isinstance(parent, dict):
+        parent.pop(final, None)
+
+
+class EditCommand:
+    """Base class for explicit application-layer property mutations."""
+
+    operation = "edit"
+
+    def __init__(self, selection: DefinitionSelection, path: Sequence[str | int]) -> None:
+        self.selection = selection
+        self.path = tuple(path)
+        self.old_authored_value: Any = MISSING
+        self._old_mapping: dict[str, Any] | None = None
+
+    @property
+    def old_value(self) -> Any:
+        return self.old_authored_value
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        raise NotImplementedError
+
+    def undo(self, working_copy: DefinitionWorkingCopy) -> None:
+        """Restore the authored value that existed before this command."""
+
+        if self._old_mapping is not None:
+            working_copy.mapping = _copy(self._old_mapping)
+            return
+        if self.old_authored_value is MISSING:
+            working_copy.remove_value(self.path)
+        else:
+            working_copy.set_value(self.path, self.old_authored_value)
+
+
+class SetPropertyCommand(EditCommand):
+    operation = "set"
+
+    def __init__(self, selection: DefinitionSelection, path: Sequence[str | int], value: Any) -> None:
+        super().__init__(selection, path)
+        self.value = _copy(value)
+        self.new_authored_value = _copy(value)
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        self.old_authored_value = _copy(working_copy.value(self.path))
+        working_copy.set_value(self.path, self.value)
+
+
+class RemovePropertyCommand(EditCommand):
+    operation = "remove"
+
+    def __init__(self, selection: DefinitionSelection, path: Sequence[str | int]) -> None:
+        super().__init__(selection, path)
+        self.new_authored_value = MISSING
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        self.old_authored_value = _copy(working_copy.value(self.path))
+        working_copy.remove_value(self.path)
+
+
+__all__ = [
+    "DefinitionWorkingCopy",
+    "EditCommand",
+    "EditValidationError",
+    "PropertyDescriptor",
+    "PropertyModel",
+    "PropertyPath",
+    "RemovePropertyCommand",
+    "SetPropertyCommand",
+    "ValidationResult",
+]
