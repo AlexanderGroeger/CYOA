@@ -1,0 +1,4 @@
+stats: {hp: 10, max_hp: 10}
+inventory: {intro: 1}
+equipment: {}
+known_moves: [intro]

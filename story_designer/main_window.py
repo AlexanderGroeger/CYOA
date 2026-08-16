@@ -99,11 +99,11 @@ class MainWindow(QMainWindow):
         self.workspace.new_story_requested.connect(self.new_story)
         self.workspace.open_story_requested.connect(self.open_story)
         self.workspace.scene_element_selected.connect(self._on_scene_element_selection)
-        self.workspace.scene_editor.geometry_committed.connect(lambda _ref: self._refresh_views())
-        self.workspace.scene_editor.structure_changed.connect(lambda _ref: self._refresh_views())
-        self.workspace.scene_editor.navigation_changed.connect(lambda _ref: self._refresh_views())
+        self.workspace.scene_editor.geometry_committed.connect(self._on_local_value_change)
+        self.workspace.scene_editor.structure_changed.connect(self._on_local_structural_change)
+        self.workspace.scene_editor.navigation_changed.connect(self._on_local_value_change)
         self.workspace.scene_editor.open_destination_scene.connect(self._open_destination_scene)
-        self.workspace.dialogue_changed.connect(lambda _ref: self._refresh_views())
+        self.workspace.dialogue_changed.connect(self._on_local_value_change)
         self.workspace.dialogue_entry_selected.connect(lambda _ref: self.inspector.clear_scene_element())
         self.inspector.open_dialogue_sequence.connect(self.workspace.open_dialogue_sequence)
         self.inspector.scene_element_renamed.connect(self._on_scene_element_renamed)
@@ -961,16 +961,25 @@ class MainWindow(QMainWindow):
         self.workspace.scene_editor.select_element(ref)
 
     def _on_inspector_state_changed(self) -> None:
-        """Refresh shell chrome without rebuilding the active editor form."""
+        """Refresh shell chrome and dependent visuals without reconstruction."""
 
-        project = self.session.project
-        if project is not None:
-            self.workspace.set_state(
-                project,
-                self.session.selection,
-                self.session.definition(),
-                self.session.diagnostics,
-            )
+        self.workspace.refresh_value_dependencies()
+        self.diagnostics.set_diagnostics(self.session.diagnostics)
+        self._update_status()
+        self._update_action_state()
+
+    def _on_local_value_change(self, _ref: object = None) -> None:
+        """Handle a value edit after its source widget has completed safely."""
+
+        self.workspace.refresh_value_dependencies()
+        self.diagnostics.set_diagnostics(self.session.diagnostics)
+        self._update_status()
+        self._update_action_state()
+
+    def _on_local_structural_change(self, _ref: object = None) -> None:
+        """Refresh only the affected shell state after a structural edit."""
+
+        self.diagnostics.set_diagnostics(self.session.diagnostics)
         self._update_status()
         self._update_action_state()
 

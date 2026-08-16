@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QSignalBlocker, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
@@ -54,6 +54,7 @@ from ..models import (
     CreateLookEventCommand,
     InsertDialogueActionCommand,
     RemoveDialogueActionCommand,
+    MoveDialogueActionCommand,
     SetDialogueActionParameterCommand,
 )
 from .property_editors import AssetPathEditor, PropertyEditorFactory
@@ -67,6 +68,81 @@ class _PropertyRow:
     authored_value: QLabel
     reset_button: QToolButton
     error: QLabel
+
+
+class _ActionListWidget(QListWidget):
+    """A view-only action list which reports safe, same-list reorder intent.
+
+    The list must not use ``InternalMove``: the canonical order belongs to the
+    ProjectSession working copy, and Qt must not mutate its item model while a
+    semantic command is also about to rebuild the view.
+    """
+
+    move_requested = Signal(int, int)
+    _LIST_MIME_TYPE = "application/x-qabstractitemmodeldatalist"
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        # DragDrop lets this subclass own the drop decision.  In particular,
+        # QListWidget's InternalMove implementation must not reorder the view
+        # before the semantic MoveDialogueActionCommand runs.
+        self.setDragDropMode(QListWidget.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setDragDropOverwriteMode(False)
+        self.setDropIndicatorShown(True)
+        self._drag_source_row: int | None = None
+
+    def startDrag(self, supported_actions: Qt.DropActions) -> None:  # noqa: N802 - Qt API name
+        self._drag_source_row = self.currentRow()
+        super().startDrag(supported_actions)
+
+    def _is_internal_drag(self, event: object) -> bool:
+        source = event.source()  # type: ignore[attr-defined]
+        mime_data = event.mimeData()  # type: ignore[attr-defined]
+        return source is self and mime_data.hasFormat(self._LIST_MIME_TYPE)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt API name
+        if not self._is_internal_drag(event):
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802 - Qt API name
+        if not self._is_internal_drag(event):
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802 - Qt API name
+        if not self._is_internal_drag(event):
+            event.ignore()
+            return
+        source = self._drag_source_row if self._drag_source_row is not None else self.currentRow()
+        self._drag_source_row = None
+        if source < 0 or source >= self.count():
+            event.ignore()
+            return
+        item = self.itemAt(event.position().toPoint())
+        target = self.count() if item is None else self.row(item)
+        if item is not None:
+            item_rect = self.visualItemRect(item)
+            if event.position().y() > item_rect.center().y():
+                target += 1
+        # ``MoveDialogueActionCommand`` takes the item's final index, while
+        # the drop target above is an insertion slot in the original list.
+        if source < target:
+            target -= 1
+        target = max(0, min(target, self.count() - 1))
+        if target == source:
+            event.ignore()
+            return
+        # Emit only immutable row numbers.  The Inspector connects this signal
+        # with Qt.QueuedConnection so its refresh cannot destroy list items or
+        # action editors while Qt is still returning from the native drop.
+        event.acceptProposedAction()
+        self.move_requested.emit(source, target)
 
 
 class InspectorWidget(QWidget):
@@ -86,6 +162,7 @@ class InspectorWidget(QWidget):
         self.session = session
         self.factory = PropertyEditorFactory()
         self._project: StoryProject | None = None
+        self._scene_logical_size: tuple[int, int] | None = None
         self._selection: DefinitionSelection | None = None
         self._definition: Any | None = None
         self._diagnostics = Diagnostics()
@@ -100,6 +177,11 @@ class InspectorWidget(QWidget):
         self._updating_scene_geometry = False
         self._updating_scene_element = False
         self._object_name_editing = False
+        self._preferred_action_row = 0
+        self._preserved_action_context = None
+        self._action_tokens: list[int] = []
+        self._action_token_counter = 0
+        self._action_selection_token: int | None = None
 
         self.header = QLabel("Inspector")
         self.header.setStyleSheet("font-size: 16px; font-weight: bold;")
@@ -226,9 +308,14 @@ class InspectorWidget(QWidget):
 
         self.look_region_behavior_box = QGroupBox("Effect / Behavior")
         behavior_layout = QVBoxLayout(self.look_region_behavior_box)
-        self.look_region_actions = QListWidget()
-        self.look_region_actions.setMinimumHeight(80)
+        self.look_region_actions = _ActionListWidget()
+        self.look_region_actions.setMinimumHeight(60)
+        self.look_region_actions.setMaximumHeight(150)
         self.look_region_actions.currentRowChanged.connect(self._look_region_action_row_changed)
+        self.look_region_actions.move_requested.connect(
+            self._move_look_region_action,
+            Qt.ConnectionType.QueuedConnection,
+        )
         behavior_layout.addWidget(self.look_region_actions)
         action_buttons = QHBoxLayout()
         self.look_region_add_action = QPushButton("+ Add Action")
@@ -268,11 +355,14 @@ class InspectorWidget(QWidget):
         self.look_region_context_page = QWidget()
         look_context_layout = QVBoxLayout(self.look_region_context_page)
         look_context_layout.setContentsMargins(0, 0, 0, 0)
-        look_context_layout.addWidget(self.look_region_identity_box)
-        look_context_layout.addWidget(self.look_region_interaction_box)
-        look_context_layout.addWidget(self.scene_geometry_box)
-        look_context_layout.addWidget(self.scene_condition_box)
-        look_context_layout.addWidget(self.look_region_behavior_box)
+        look_context_content = QWidget()
+        look_context_content_layout = QVBoxLayout(look_context_content)
+        look_context_content_layout.setContentsMargins(0, 0, 0, 0)
+        look_context_content_layout.addWidget(self.look_region_identity_box)
+        look_context_content_layout.addWidget(self.look_region_interaction_box)
+        look_context_content_layout.addWidget(self.scene_geometry_box)
+        look_context_content_layout.addWidget(self.scene_condition_box)
+        look_context_content_layout.addWidget(self.look_region_behavior_box)
         self.look_region_unknown_box = QGroupBox("Unknown / Legacy Fields")
         self.look_region_unknown_text = QPlainTextEdit()
         self.look_region_unknown_text.setReadOnly(True)
@@ -280,19 +370,32 @@ class InspectorWidget(QWidget):
         self.look_region_unknown_box_layout.addWidget(QLabel("Preserved, but not interpreted by this page."))
         self.look_region_unknown_box_layout.addWidget(self.look_region_unknown_text)
         self.look_region_unknown_box.hide()
-        look_context_layout.addWidget(self.look_region_unknown_box)
-        look_context_layout.addStretch(1)
+        look_context_content_layout.addWidget(self.look_region_unknown_box)
+        look_context_content_layout.addStretch(1)
+        look_scroll = QScrollArea()
+        look_scroll.setWidgetResizable(True)
+        look_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        look_scroll.setWidget(look_context_content)
+        look_context_layout.addWidget(look_scroll)
         self.context_tabs.addTab(self.scene_context_page, "Scene")
         self.context_tabs.addTab(self.look_region_context_page, "Look Region")
         self.object_context_page = QWidget()
         object_context_layout = QVBoxLayout(self.object_context_page)
         object_context_layout.setContentsMargins(0, 0, 0, 0)
-        object_context_layout.addWidget(self.object_identity_box)
-        object_context_layout.addWidget(self.object_geometry_box)
-        object_context_layout.addWidget(self.object_appearance_box)
-        object_context_layout.addWidget(self.object_condition_box)
-        object_context_layout.addWidget(self.object_context_status)
-        object_context_layout.addStretch(1)
+        object_context_content = QWidget()
+        object_context_content_layout = QVBoxLayout(object_context_content)
+        object_context_content_layout.setContentsMargins(0, 0, 0, 0)
+        object_context_content_layout.addWidget(self.object_identity_box)
+        object_context_content_layout.addWidget(self.object_geometry_box)
+        object_context_content_layout.addWidget(self.object_appearance_box)
+        object_context_content_layout.addWidget(self.object_condition_box)
+        object_context_content_layout.addWidget(self.object_context_status)
+        object_context_content_layout.addStretch(1)
+        object_scroll = QScrollArea()
+        object_scroll.setWidgetResizable(True)
+        object_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        object_scroll.setWidget(object_context_content)
+        object_context_layout.addWidget(object_scroll)
         self.context_tabs.addTab(self.object_context_page, "Object")
         self._set_look_region_context_visible(False)
         self._set_object_context_visible(False)
@@ -363,7 +466,24 @@ class InspectorWidget(QWidget):
         definition: Any | None,
         diagnostics: Diagnostics,
     ) -> None:
+        preserved_scene_element = self._scene_element if self._selection == selection else None
+        if preserved_scene_element is not None:
+            self._preferred_action_row = max(0, self.look_region_actions.currentRow())
+        else:
+            self._preferred_action_row = 0
+        self._preserved_action_context = preserved_scene_element
         self._project = project
+        display = getattr(project.manifest, "display", None) if project is not None else None
+        if isinstance(display, Mapping):
+            try:
+                self._scene_logical_size = (
+                    max(1, int(display.get("width", 1))),
+                    max(1, int(display.get("height", 1))),
+                )
+            except (TypeError, ValueError):
+                self._scene_logical_size = None
+        else:
+            self._scene_logical_size = None
         self._selection = selection
         self._definition = definition
         self._diagnostics = diagnostics
@@ -409,6 +529,14 @@ class InspectorWidget(QWidget):
 
     def set_scene_element(self, selection: object, authored: Mapping[str, Any]) -> None:
         """Show one nested scene element and its editable geometry controls."""
+
+        if self._scene_element == selection:
+            self._update_scene_element_values(authored)
+            return
+
+        if selection != self._preserved_action_context:
+            self._preferred_action_row = 0
+        self._preserved_action_context = None
 
         self._scene_element = selection
         self.property_scroll.setEnabled(True)
@@ -472,7 +600,58 @@ class InspectorWidget(QWidget):
         self.validation_value.setText("Conditional" if value is not MISSING else "Authored")
         self.state_changed.emit()
 
-    def _build_look_region_context(self, authored: Mapping[str, Any]) -> None:
+    def _update_scene_element_values(self, authored: Mapping[str, Any]) -> None:
+        """Update bindings for the current element without rebuilding them.
+
+        This is the hot path for geometry/property notifications.  The
+        controls that originated the edit remain owned by the same QObject;
+        external model updates are applied with signals blocked.
+        """
+
+        selection = self._scene_element
+        if selection is None:
+            return
+        kind = getattr(selection, "kind", "element")
+        self._updating_scene_element = True
+        self._updating_scene_geometry = True
+        try:
+            values, names = self._scene_geometry_values(selection, authored)
+            for index, name in enumerate(names):
+                editor = self._scene_geometry_fields.get(name)
+                if editor is None:
+                    continue
+                blocker = QSignalBlocker(editor)
+                try:
+                    editor.setValue(values[index])  # type: ignore[attr-defined]
+                finally:
+                    del blocker
+            if kind == "look_region":
+                self._update_region_geometry_ranges()
+            if kind == "object":
+                self._build_object_context(authored)
+                asset = self._scene_asset_fields.get("sprite")
+                if asset is not None:
+                    blocker = QSignalBlocker(asset)
+                    try:
+                        asset.setText(str(authored.get("sprite", "")))
+                    finally:
+                        del blocker
+            elif kind == "look_region":
+                previous_path = self._look_region_actions_path
+                self._build_look_region_context(authored, render_actions=False)
+                if previous_path != self._look_event_actions_path():
+                    self._render_look_region_actions()
+            if kind in {"object", "look_region"}:
+                condition = authored.get("visible_when", authored.get("conditions", MISSING))
+                editor = self.object_condition_editor if kind == "object" else self.scene_condition_editor
+                editor.set_condition(condition, project=self._project)
+        finally:
+            self._updating_scene_geometry = False
+            self._updating_scene_element = False
+        self.summary.setPlainText(_compact_mapping(authored))
+        self._update_header()
+
+    def _build_look_region_context(self, authored: Mapping[str, Any], *, render_actions: bool = True) -> None:
         """Populate the schema-faithful controls for one selected region."""
 
         look = authored.get("look") if isinstance(authored.get("look"), Mapping) else authored
@@ -491,7 +670,8 @@ class InspectorWidget(QWidget):
         self.look_region_interaction_box.show()
         self.look_region_rename_button.setEnabled(self.session is not None)
         self.look_region_new_event.setEnabled(self.session is not None)
-        self._render_look_region_actions()
+        if render_actions:
+            self._render_look_region_actions()
         self.look_region_open_dialogue.setEnabled(self._look_region_dialogue_reference() is not None)
         known = {"id", "rect", "hitbox", "interaction", "event", "priority", "visible_when", "conditions", "states", "z"}
         unknown = {key: value for key, value in authored.items() if key not in known}
@@ -582,13 +762,20 @@ class InspectorWidget(QWidget):
         except EditValidationError as exc:
             self.look_region_action_status.setText(exc.message)
             return
-        self._refresh_look_region_context()
+        mapping = self._scene_element_mapping()
+        if isinstance(mapping, Mapping):
+            if key == "event":
+                self._update_scene_element_values(mapping)
+            else:
+                self.summary.setPlainText(_compact_mapping(mapping))
+                self._update_header()
         self.state_changed.emit()
 
     def _refresh_look_region_context(self) -> None:
         mapping = self._scene_element_mapping()
         if self._scene_element is not None and isinstance(mapping, Mapping):
-            self.set_scene_element(self._scene_element, mapping)
+            self._update_scene_element_values(mapping)
+            self._render_look_region_actions()
 
     def _look_event_actions_path(self) -> tuple[str | int, ...] | None:
         event_id = self.look_region_event_combo.currentData()
@@ -618,27 +805,54 @@ class InspectorWidget(QWidget):
         return path, current if isinstance(current, list) else None
 
     def _render_look_region_actions(self) -> None:
-        self.look_region_actions.clear()
-        self._clear_look_region_action_fields()
+        previous_path = self._look_region_actions_path
+        selected_token = self._action_selection_token
+        blocker = QSignalBlocker(self.look_region_actions)
+        try:
+            self.look_region_actions.clear()
+            self._clear_look_region_action_fields()
+        finally:
+            del blocker
         path, actions = self._look_event_actions()
         self._look_region_actions_path = path
         self.look_region_behavior_box.show()
         if actions is None:
+            self._action_tokens = []
+            self._action_selection_token = None
             self.look_region_action_status.setText("Choose an existing look event to edit its action payload.")
             self.look_region_add_action.setEnabled(False)
             self.look_region_remove_action.setEnabled(False)
             return
         self.look_region_action_status.clear()
         self.look_region_add_action.setEnabled(True)
-        for action in actions:
-            if isinstance(action, Mapping) and isinstance(action.get("type"), str):
-                spec = action_editor_spec(action["type"], ActionScope.EXPLORATION)
-                self.look_region_actions.addItem(spec.display_name if spec is not None else str(action["type"]))
-            else:
-                self.look_region_actions.addItem("Legacy / unsupported action")
-        self.look_region_remove_action.setEnabled(self.look_region_actions.currentRow() >= 0)
-        if actions:
-            self.look_region_actions.setCurrentRow(0)
+        if previous_path != path:
+            self._action_tokens = [self._new_action_token() for _ in actions]
+        else:
+            self._action_tokens = self._action_tokens[:len(actions)]
+            while len(self._action_tokens) < len(actions):
+                self._action_tokens.append(self._new_action_token())
+        selected_row = next(
+            (index for index, token in enumerate(self._action_tokens) if token == selected_token),
+            self._preferred_action_row,
+        )
+        blocker = QSignalBlocker(self.look_region_actions)
+        try:
+            for action in actions:
+                if isinstance(action, Mapping) and isinstance(action.get("type"), str):
+                    spec = action_editor_spec(action["type"], ActionScope.EXPLORATION)
+                    self.look_region_actions.addItem(spec.display_name if spec is not None else str(action["type"]))
+                else:
+                    self.look_region_actions.addItem("Legacy / unsupported action")
+            selected_row = min(max(0, selected_row), len(actions) - 1) if actions else -1
+            self.look_region_actions.setCurrentRow(selected_row)
+        finally:
+            del blocker
+        self._preferred_action_row = max(0, selected_row)
+        self._look_region_action_row_changed(selected_row)
+
+    def _new_action_token(self) -> int:
+        self._action_token_counter += 1
+        return self._action_token_counter
 
     def _clear_look_region_action_fields(self) -> None:
         self._look_region_action_fields.clear()
@@ -651,6 +865,10 @@ class InspectorWidget(QWidget):
                     widget.deleteLater()
 
     def _look_region_action_row_changed(self, row: int) -> None:
+        self._preferred_action_row = max(0, row)
+        self._action_selection_token = (
+            self._action_tokens[row] if 0 <= row < len(self._action_tokens) else None
+        )
         self._clear_look_region_action_fields()
         _path, actions = self._look_event_actions()
         if actions is None or row < 0 or row >= len(actions):
@@ -770,21 +988,49 @@ class InspectorWidget(QWidget):
         except EditValidationError as exc:
             self.look_region_action_status.setText(exc.message)
             return
-        self._refresh_look_region_context()
+        # This is a value binding.  Keep the sender and its owning action
+        # editor alive; only cheap derived text needs to change here.
+        mapping = self._scene_element_mapping()
+        self.summary.setPlainText(_compact_mapping(mapping))
+        self._update_header()
         self.state_changed.emit()
 
     def _add_look_region_action(self) -> None:
         if self.session is None or self._selection is None or self._look_region_actions_path is None:
             return
+        action_type = str(self.look_region_action_type.currentData())
+        if action_type == "dialog":
+            # A dialog action is commonly inserted while a type popup/menu is
+            # still unwinding.  Let that native event finish before changing
+            # the action list and its parameter page.
+            actions_path = self._look_region_actions_path
+            selection = self._selection
+            QTimer.singleShot(
+                0,
+                lambda path=actions_path, owner=selection: self._insert_look_region_action(owner, path, action_type),
+            )
+            return
+        self._insert_look_region_action(self._selection, self._look_region_actions_path, action_type)
+
+    def _insert_look_region_action(
+        self,
+        owner: DefinitionSelection | None,
+        actions_path: tuple[str | int, ...] | None,
+        action_type: str,
+    ) -> None:
+        if self.session is None or self._selection != owner or owner is None or actions_path is None:
+            return
         try:
             command = InsertDialogueActionCommand(
-                self._selection, self._look_region_actions_path,
-                minimal_authored_action(str(self.look_region_action_type.currentData()), ActionScope.EXPLORATION),
+                owner, actions_path,
+                minimal_authored_action(action_type, ActionScope.EXPLORATION),
             )
             self.session.apply_command(command)
         except (EditValidationError, KeyError, TypeError, ValueError) as exc:
             self.look_region_action_status.setText(str(exc))
             return
+        if command.index is not None:
+            self._action_tokens.insert(command.index, self._new_action_token())
         self._refresh_look_region_context()
         if command.index is not None:
             self.look_region_actions.setCurrentRow(command.index)
@@ -794,12 +1040,63 @@ class InspectorWidget(QWidget):
         row = self.look_region_actions.currentRow()
         if self.session is None or self._selection is None or self._look_region_actions_path is None or row < 0:
             return
+        actions_path = self._look_region_actions_path
+        owner = self._selection
+        QTimer.singleShot(
+            0,
+            lambda path=actions_path, index=row, selection=owner: self._remove_look_region_action_now(selection, path, index),
+        )
+
+    def _remove_look_region_action_now(
+        self,
+        owner: DefinitionSelection,
+        actions_path: tuple[str | int, ...],
+        row: int,
+    ) -> None:
+        if self.session is None or self._selection != owner:
+            return
         try:
-            self.session.apply_command(RemoveDialogueActionCommand(self._selection, self._look_region_actions_path, row))
+            self.session.apply_command(RemoveDialogueActionCommand(owner, actions_path, row))
         except (EditValidationError, KeyError, TypeError, ValueError) as exc:
             self.look_region_action_status.setText(str(exc))
             return
+        if 0 <= row < len(self._action_tokens):
+            removed_token = self._action_tokens.pop(row)
+            if self._action_selection_token == removed_token:
+                self._action_selection_token = None
         self._refresh_look_region_context()
+        self.state_changed.emit()
+
+    def _move_look_region_action(self, source: int, target: int) -> None:
+        """Move an action within the selected look event's own action list."""
+
+        if (
+            self.session is None
+            or self._selection is None
+            or self._look_region_actions_path is None
+            or source == target
+        ):
+            return
+        selected_source = (
+            0 <= source < len(self._action_tokens)
+            and self._action_selection_token == self._action_tokens[source]
+        )
+        try:
+            self.session.apply_command(MoveDialogueActionCommand(
+                self._selection,
+                self._look_region_actions_path,
+                source,
+                target,
+            ))
+        except (EditValidationError, KeyError, TypeError, ValueError) as exc:
+            self.look_region_action_status.setText(str(exc))
+            return
+        if 0 <= source < len(self._action_tokens):
+            token = self._action_tokens.pop(source)
+            self._action_tokens.insert(max(0, min(target, len(self._action_tokens))), token)
+        self._refresh_look_region_context()
+        if not selected_source:
+            self.look_region_actions.setCurrentRow(target)
         self.state_changed.emit()
 
     def _open_look_region_dialogue(self) -> None:
@@ -855,6 +1152,66 @@ class InspectorWidget(QWidget):
             self._updating_scene_geometry = False
 
     def _build_scene_geometry_fields(self, selection: object, authored: Mapping[str, Any]) -> None:
+        values, names = self._scene_geometry_values(selection, authored)
+        if not names:
+            self.scene_geometry_form.addRow(QLabel("This element has no graphical geometry editor."))
+            self.scene_geometry_box.show()
+            return
+        for index, name in enumerate(names):
+            # Parent at construction time.  These controls are repeatedly
+            # rebuilt, and a parentless QWidget can briefly be treated as a
+            # native top-level window while Qt reparents it into the form.
+            parent = self.object_geometry_box if getattr(selection, "kind", "") == "object" else self.scene_geometry_box
+            form = self.object_geometry_form if getattr(selection, "kind", "") == "object" else self.scene_geometry_form
+            editor = QDoubleSpinBox(parent) if name == "rotation" else QSpinBox(parent)
+            editor.setRange(-1_000_000, 1_000_000)
+            if name == "rotation":
+                editor.setDecimals(2)
+            if name in {"width", "height"}:
+                editor.setMinimum(1)
+            editor.setKeyboardTracking(False)
+            blocker = QSignalBlocker(editor)
+            try:
+                editor.setValue(int(values[index]))
+            finally:
+                del blocker
+            editor.valueChanged.connect(lambda _value, ref=selection, changed=name: self._scene_geometry_value_changed(ref, changed))
+            self._scene_geometry_fields[name] = editor
+            form.addRow(name.title(), editor)
+        if getattr(selection, "kind", "") == "look_region":
+            self._update_region_geometry_ranges()
+            if self._scene_logical_size is not None:
+                x, y, width, height = (int(value) for value in values[:4])
+                scene_width, scene_height = self._scene_logical_size
+                if x < 0 or y < 0 or width < 1 or height < 1 or x + width > scene_width or y + height > scene_height:
+                    warning = QLabel("Warning: this Look Region is outside the scene bounds. Editing it will constrain it.")
+                    warning.setStyleSheet("color: #f59e0b;")
+                    warning.setWordWrap(True)
+                    form.addRow(warning)
+        (self.object_geometry_box if getattr(selection, "kind", "") == "object" else self.scene_geometry_box).show()
+
+    def _update_region_geometry_ranges(self) -> None:
+        if self._scene_logical_size is None:
+            return
+        fields = self._scene_geometry_fields
+        if not all(name in fields for name in ("x", "y", "width", "height")):
+            return
+        x_field, y_field = fields["x"], fields["y"]
+        width_field, height_field = fields["width"], fields["height"]
+        x, y = int(x_field.value()), int(y_field.value())  # type: ignore[attr-defined]
+        width, height = int(width_field.value()), int(height_field.value())  # type: ignore[attr-defined]
+        scene_width, scene_height = self._scene_logical_size
+        blockers = [QSignalBlocker(field) for field in (x_field, y_field, width_field, height_field)]
+        try:
+            x_field.setRange(min(0, x), max(x, scene_width - max(1, width)))  # type: ignore[attr-defined]
+            y_field.setRange(min(0, y), max(y, scene_height - max(1, height)))  # type: ignore[attr-defined]
+            width_field.setRange(1, max(width, scene_width - max(0, x)))  # type: ignore[attr-defined]
+            height_field.setRange(1, max(height, scene_height - max(0, y)))  # type: ignore[attr-defined]
+        finally:
+            del blockers
+
+    @staticmethod
+    def _scene_geometry_values(selection: object, authored: Mapping[str, Any]) -> tuple[list[Any], list[str]]:
         kind = getattr(selection, "kind", "")
         if kind == "object":
             raw = authored.get("position", (0, 0))
@@ -873,27 +1230,8 @@ class InspectorWidget(QWidget):
             values = list(raw) if isinstance(raw, (list, tuple)) and len(raw) == 4 else [0, 0, 1, 1]
             names = ["x", "y", "width", "height"]
         else:
-            self.scene_geometry_form.addRow(QLabel("This element has no graphical geometry editor."))
-            self.scene_geometry_box.show()
-            return
-        for index, name in enumerate(names):
-            # Parent at construction time.  These controls are repeatedly
-            # rebuilt, and a parentless QWidget can briefly be treated as a
-            # native top-level window while Qt reparents it into the form.
-            parent = self.object_geometry_box if kind == "object" else self.scene_geometry_box
-            form = self.object_geometry_form if kind == "object" else self.scene_geometry_form
-            editor = QDoubleSpinBox(parent) if name == "rotation" else QSpinBox(parent)
-            editor.setRange(-1_000_000, 1_000_000)
-            if name == "rotation":
-                editor.setDecimals(2)
-            if name in {"width", "height"}:
-                editor.setMinimum(1)
-            editor.setKeyboardTracking(False)
-            editor.setValue(int(values[index]))
-            editor.valueChanged.connect(lambda _value, ref=selection, changed=name: self._scene_geometry_value_changed(ref, changed))
-            self._scene_geometry_fields[name] = editor
-            form.addRow(name.title(), editor)
-        (self.object_geometry_box if kind == "object" else self.scene_geometry_box).show()
+            return [], []
+        return values, names
 
     def _build_scene_asset(self, selection: object, authored: Mapping[str, Any]) -> None:
         self._clear_object_asset_form()
@@ -940,6 +1278,7 @@ class InspectorWidget(QWidget):
         if getattr(selection, "kind", "") == "object":
             self._object_geometry_value_changed(selection, changed)
             return
+        self._update_region_geometry_ranges()
         self._emit_scene_geometry(selection)
 
     def _object_geometry_value_changed(self, selection: object, changed: str | None = None) -> None:

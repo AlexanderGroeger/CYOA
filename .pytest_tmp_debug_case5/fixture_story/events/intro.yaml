@@ -1,0 +1,6 @@
+id: intro
+chance: 1
+events:
+  - id: ending
+    weight: 1
+future_event_extension: {preserves: true}

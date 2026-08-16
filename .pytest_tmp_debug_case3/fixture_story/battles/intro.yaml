@@ -1,0 +1,14 @@
+id: intro
+enemy:
+  name: Training Dummy
+  hp: 1
+  attack: 0
+  defense: 0
+  moves:
+    - name: Bump
+      damage: [0, 0]
+      weight: 1
+victory:
+  rewards:
+    items: [intro]
+future_battle_extension: {preserves: true}

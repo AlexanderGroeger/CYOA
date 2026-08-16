@@ -1,77 +1,104 @@
 id: exploration_archive
 background: cave.png
 music: overworld.mp3
-
 exploration:
   dialog:
-    - conditions:
-        all:
-          - flag: archive_cache_taken
-            equals: false
-      sequence: archive_discovery
-    - conditions:
-        all:
-          - flag: archive_cache_taken
-            equals: true
-      sequence: archive_after_cache
-
+  - conditions:
+      all:
+      - flag: archive_cache_taken
+        equals: false
+    sequence: archive_discovery
+  - conditions:
+      all:
+      - flag: archive_cache_taken
+        equals: true
+    sequence: archive_after_cache
   dialogue_sequences:
     archive_discovery:
-      - "The concealed room smells of old paper. A travel cache waits beneath a mural."
+    - The concealed room smells of old paper. A travel cache waits beneath a mural.
     archive_after_cache:
-      - "Only the mural remains. The useful supplies have already been claimed."
+    - Only the mural remains. The useful supplies have already been claimed.
     inspect_mural:
-      - "The mural depicts archivists carrying the same Ember Seal found in the study."
+    - The mural depicts archivists carrying the same Ember Seal found in the study.
     collect_cache:
-      - "The cache contains tea, a light blade, and a padded cloak -- enough to test the Bag actions."
-
+    - The cache contains tea, a light blade, and a padded cloak -- enough to test
+      the Bag actions.
   navigation:
-    - scene: exploration_hall
-      label: Hallway
-    - scene: exploration_study
-      label: Study
-
+  - scene: exploration_hall
+    label: Hallway
+  - scene: exploration_study
+    label: Study
   objects:
-    - id: archive_cache
-      sprite: heart.png
-      position: [292, 158]
-      z: 12
-      visible_when:
-        all:
-          - flag: archive_cache_taken
-            equals: false
-      look:
-        interaction: action
-        rect: [288, 154, 28, 28]
-        event: collect_cache
-
+  - id: archive_cache
+    sprite: heart.png
+    position:
+    - 292
+    - 158
+    z: 12
+    visible_when:
+      all:
+      - flag: archive_cache_taken
+        equals: false
   look_regions:
-    - id: archive_mural
-      rect: [76, 50, 152, 126]
-      interaction: inspect
-      event: inspect_mural
-      priority: 1
-
+  - id: archive_mural
+    rect:
+    - 76
+    - 50
+    - 152
+    - 126
+    interaction: inspect
+    event: inspect_mural
+    priority: 1
+  - id: archive_cache_interaction
+    rect:
+    - 288
+    - 154
+    - 28
+    - 28
+    interaction: action
+    event: archive_cache_interaction_event
+    visible_when:
+      all:
+      - flag: archive_cache_taken
+        equals: false
   look_events:
     inspect_mural:
       actions:
-        - type: dialog
-          dialog: inspect_mural
+      - type: dialog
+        dialog: inspect_mural
     collect_cache:
       actions:
-        - type: dialog
-          dialog: collect_cache
-        - type: sound
-          file: got_item.wav
-        - type: give_item
-          item: restorative_tea
-          quantity: 1
-        - type: give_item
-          item: archivist_blade
-          quantity: 1
-        - type: give_item
-          item: archivist_cloak
-          quantity: 1
-        - type: set_flag
-          flag: archive_cache_taken
-          value: true
+      - type: dialog
+        dialog: collect_cache
+      - type: sound
+        file: got_item.wav
+      - type: give_item
+        item: restorative_tea
+        quantity: 1
+      - type: give_item
+        item: archivist_blade
+        quantity: 1
+      - type: give_item
+        item: archivist_cloak
+        quantity: 1
+      - type: set_flag
+        flag: archive_cache_taken
+        value: true
+    archive_cache_interaction_event:
+      actions:
+      - type: dialog
+        dialog: collect_cache
+      - type: sound
+        file: got_item.wav
+      - type: give_item
+        item: restorative_tea
+        quantity: 1
+      - type: give_item
+        item: archivist_blade
+        quantity: 1
+      - type: give_item
+        item: archivist_cloak
+        quantity: 1
+      - type: set_flag
+        flag: archive_cache_taken
+        value: true

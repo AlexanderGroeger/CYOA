@@ -7,13 +7,14 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QAction, QBrush, QColor, QFont, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
+    QApplication,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -61,8 +62,22 @@ class SceneCanvasView(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setBackgroundBrush(QColor("#252733"))
         self._drag_mode_before_resize: QGraphicsView.DragMode | None = None
+        self._scene_interaction_handler: Callable[[str, QPointF], bool | None] | None = None
+        self._custom_scene_interaction = False
+
+    def set_scene_interaction_handler(
+        self, handler: Callable[[str, QPointF], bool | None] | None
+    ) -> None:
+        self._scene_interaction_handler = handler
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API name
+        if event.button() == Qt.MouseButton.LeftButton and self._scene_interaction_handler is not None:
+            scene_pos = self.mapToScene(event.position().toPoint())
+            handled = self._scene_interaction_handler("press", scene_pos)
+            if handled:
+                self._custom_scene_interaction = True
+                event.accept()
+                return
         # ScrollHandDrag can begin a viewport grab before the graphics child
         # receives the press.  Suppress it for editor handles so the handle's
         # release cannot be turned into a canvas pan when its rect previews.
@@ -91,11 +106,21 @@ class SceneCanvasView(QGraphicsView):
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API name
         point = self.mapToScene(event.position().toPoint())
         self.cursor_moved.emit(point)
+        if self._custom_scene_interaction and self._scene_interaction_handler is not None:
+            self._scene_interaction_handler("move", point)
+            event.accept()
+            return
         super().mouseMoveEvent(event)
         self.drag_position_changed.emit(point)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API name
         point = self.mapToScene(event.position().toPoint())
+        if self._custom_scene_interaction and self._scene_interaction_handler is not None:
+            self._scene_interaction_handler("release", point)
+            self._custom_scene_interaction = False
+            self.restore_drag_mode()
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
         self.mouse_released.emit(point)
         self.restore_drag_mode()
@@ -149,11 +174,25 @@ class SceneGraphicsItem(QGraphicsRectItem):
             self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
             self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
             if editable:
-                self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+                # SceneEditorWidget owns completed-click selection and drag
+                # gestures.  Qt's default movable/selectable press handling
+                # would select on mouse-down and bypass overlap cycling.
+                self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         else:
             self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         self.setPos(_x, _y)
         self.setToolTip(self._tooltip())
+
+    def scene_rect(self) -> QRectF:
+        """Return the complete authored rectangle in scene coordinates."""
+
+        return QRectF(self.scenePos().x(), self.scenePos().y(), self.rect().width(), self.rect().height())
+
+    def set_scene_rect(self, rect: QRectF) -> None:
+        """Apply one complete scene-space rectangle to the local item."""
+
+        self.setPos(rect.x(), rect.y())
+        self.setRect(0, 0, max(1.0, rect.width()), max(1.0, rect.height()))
 
     def _tooltip(self) -> str:
         if self.ref is None:
@@ -164,6 +203,29 @@ class SceneGraphicsItem(QGraphicsRectItem):
         if self.label:
             value += f"\n{self.label}"
         return value
+
+    def update_content(
+        self,
+        *,
+        pixmap: QPixmap | None = None,
+        label: str | None = None,
+        missing: str | None = None,
+        rotation: float | None = None,
+        z: int | None = None,
+    ) -> None:
+        """Apply value-only visual changes without replacing this item."""
+
+        if pixmap is not None or self.pixmap is not None:
+            self.pixmap = pixmap
+        if label is not None:
+            self.label = label
+        self.missing = missing
+        if rotation is not None:
+            self.setRotation(rotation)
+        if z is not None:
+            self.setZValue(z)
+        self.setToolTip(self._tooltip())
+        self.update()
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.save()
@@ -293,6 +355,10 @@ class SceneEditorWidget(QWidget):
         self.resize_handles: dict[str, ResizeHandleItem] = {}
         self._resize_gesture: tuple[SceneGraphicsItem, str, tuple[float, float, float, float]] | None = None
         self._resize_view_drag_mode: QGraphicsView.DragMode | None = None
+        self._pointer_gesture: dict[str, Any] | None = None
+        self._cycle_candidates: tuple[SceneElementSelection, ...] = ()
+        self._cycle_point: QPointF | None = None
+        self.scene_bounds_warning: str | None = None
         self.scene = QGraphicsScene(self)
         self.navigation_panel = NavigationPanel(session, self)
         self.navigation_panel.navigation_changed.connect(self.navigation_changed)
@@ -303,6 +369,7 @@ class SceneEditorWidget(QWidget):
         self.view.drag_position_changed.connect(self._preview_active_resize)
         self.view.mouse_released.connect(self._finish_active_resize)
         self.view.cancel_requested.connect(self.cancel_gesture)
+        self.view.set_scene_interaction_handler(self._handle_scene_pointer)
         self.scene.selectionChanged.connect(self._selection_changed)
 
         self.scene_title = QLabel("Scene Editor")
@@ -359,6 +426,11 @@ class SceneEditorWidget(QWidget):
         self.navigation_summary = QLabel("Move Destinations: -")
         self.navigation_summary.setStyleSheet("color: #64748b;")
         layout.addWidget(self.navigation_summary)
+        self.scene_warning = QLabel()
+        self.scene_warning.setStyleSheet("color: #f59e0b;")
+        self.scene_warning.setWordWrap(True)
+        self.scene_warning.hide()
+        layout.addWidget(self.scene_warning)
         content = QHBoxLayout()
         content.addWidget(self.view, 1)
         content.addWidget(self.navigation_panel)
@@ -371,6 +443,10 @@ class SceneEditorWidget(QWidget):
         self.cancel_gesture()
         self.presentation = None
         self.selected_element = None
+        self._pointer_gesture = None
+        self._cycle_candidates = ()
+        self._cycle_point = None
+        self.scene_bounds_warning = None
         self.object_items.clear()
         self.look_region_items.clear()
         self.resize_handles.clear()
@@ -379,6 +455,8 @@ class SceneEditorWidget(QWidget):
         self._update_structural_actions()
         self.scene_title.setText("Scene Editor")
         self.navigation_summary.setText("Move Destinations: -")
+        self.scene_warning.clear()
+        self.scene_warning.hide()
         self.navigation_panel.clear()
         self.coordinate_value.setText("x: —   y: —")
 
@@ -398,6 +476,18 @@ class SceneEditorWidget(QWidget):
         previous_fit_mode = self._fit_mode
         presentation = build_scene_presentation(project, scene_id, working_mapping)
         self.presentation = presentation
+        invalid_regions = [
+            region.id
+            for region in presentation.look_regions
+            if not self._region_rect_is_valid(region.rect)
+        ]
+        self.scene_bounds_warning = (
+            "Warning: Look Region outside scene bounds: " + ", ".join(invalid_regions)
+            if invalid_regions
+            else None
+        )
+        self.scene_warning.setText(self.scene_bounds_warning or "")
+        self.scene_warning.setVisible(self.scene_bounds_warning is not None)
         self.navigation_panel.set_scene(project, scene_id, working_mapping)
         destinations = [item.destination or "[invalid target]" for item in presentation.navigation]
         self.navigation_summary.setText(
@@ -445,6 +535,55 @@ class SceneEditorWidget(QWidget):
             self._fit_mode = previous_fit_mode
         else:
             self.fit_scene()
+        self._update_structural_actions()
+
+    def refresh_value_dependencies(self, ref: SceneElementSelection | None = None) -> None:
+        """Refresh one selected element's visual values in place.
+
+        Property edits must not reconstruct the graphics scene while a Qt
+        editor is delivering its signal.  Presentation data is rebuilt as a
+        pure adapter, then only the existing graphics item is updated.
+        """
+
+        if self.session is None or self.session.project is None or self.presentation is None:
+            return
+        target = ref or self.selected_element
+        if target is None:
+            return
+        selection = self._scene_definition_selection(target.scene_id)
+        mapping = self.session.working_mapping(selection)
+        if mapping is None:
+            return
+        presentation = build_scene_presentation(self.session.project, target.scene_id, mapping)
+        self.presentation = presentation
+        if target.kind == "object":
+            value = next((item for item in presentation.objects if item.id == target.id), None)
+            graphics = self.object_items.get(target.id)
+            if value is None or graphics is None:
+                return
+            width, height = value.size or _asset_size(value.sprite_path, default=(48, 36))
+            pixmap = _load_pixmap(value.sprite_path, (width, height) if value.size else None)
+            missing = value.asset_error if value.sprite else "Object has no sprite asset"
+            if value.sprite and pixmap is None:
+                missing = missing or f"Unable to load sprite: {value.sprite}"
+            elif value.sprite_path is not None and pixmap is not None:
+                missing = None
+            label = value.id + (f"  ({value.name})" if value.name else "")
+            if value.conditional:
+                label += "  ◇ conditional"
+            graphics.update_content(pixmap=pixmap, label=label, missing=missing, rotation=value.rotation, z=100 + value.z)
+        elif target.kind == "look_region":
+            value = next((item for item in presentation.look_regions if item.id == target.id), None)
+            graphics = self.look_region_items.get(target.id)
+            if value is None or graphics is None:
+                return
+            graphics.set_scene_rect(self.scene_element_bounds(target) or QRectF(*value.rect))
+            graphics.update_content(
+                label=value.id + ("  ◇ conditional" if value.conditional else ""),
+                missing=None,
+                z=20000 + value.z,
+            )
+        self._sync_resize_handles()
         self._update_structural_actions()
 
     def _add_background(self, presentation: ScenePresentation) -> None:
@@ -524,23 +663,239 @@ class SceneEditorWidget(QWidget):
         return item
 
     def select_element(self, ref: SceneElementSelection | None, *, emit: bool = True) -> None:
-        self.scene.clearSelection()
+        self._cycle_candidates = ()
+        self._cycle_point = None
         self.selected_element = ref
-        if ref is not None:
-            item = self._item_for_ref(ref)
-            if item is not None:
-                item.setSelected(True)
+        blocker = QSignalBlocker(self.scene)
+        try:
+            self.scene.clearSelection()
+            if ref is not None:
+                item = self._item_for_ref(ref)
+                if item is not None:
+                    item.setSelected(True)
+        finally:
+            del blocker
         self._sync_resize_handles()
         self._update_structural_actions()
         if emit:
             self.element_selected.emit(ref)
+
+    def _region_rect_is_valid(self, rect: tuple[int, int, int, int]) -> bool:
+        if self.presentation is None:
+            return True
+        x, y, width, height = rect
+        scene_width, scene_height = self.presentation.logical_size
+        return x >= 0 and y >= 0 and width >= 1 and height >= 1 and x + width <= scene_width and y + height <= scene_height
+
+    def _region_bounds(self) -> tuple[float, float]:
+        if self.presentation is None:
+            return 1.0, 1.0
+        return float(self.presentation.logical_size[0]), float(self.presentation.logical_size[1])
+
+    def _constrain_region_rect(
+        self, rect: tuple[float, float, float, float]
+    ) -> tuple[float, float, float, float]:
+        scene_width, scene_height = self._region_bounds()
+        _x, _y, raw_width, raw_height = rect
+        width = min(scene_width, max(1.0, raw_width))
+        height = min(scene_height, max(1.0, raw_height))
+        x = min(max(0.0, _x), scene_width - width)
+        y = min(max(0.0, _y), scene_height - height)
+        return x, y, width, height
 
     def _item_for_ref(self, ref: SceneElementSelection) -> SceneGraphicsItem | None:
         if ref.kind == "look_region":
             return self.look_region_items.get(ref.id)
         return self.object_items.get(ref.id)
 
+    def scene_element_bounds(self, ref: SceneElementSelection) -> QRectF | None:
+        """Resolve the current authored bounds in scene coordinates.
+
+        Graphics items and handles are views of this rectangle.  They must not
+        be used to recover a previous owner's size or position.
+        """
+
+        if self.session is not None and self.session.project is not None:
+            selection = self._scene_definition_selection(ref.scene_id)
+            mapping = self.session.working_mapping(selection)
+            target = scene_geometry_target(mapping or {}, ref)
+            if target is not None:
+                if target.shape == "rect":
+                    return QRectF(*target.value)
+                if target.shape == "point":
+                    presentation = build_scene_presentation(self.session.project, ref.scene_id, mapping or {})
+                    value = next((item for item in presentation.objects if item.id == ref.id), None)
+                    if value is not None:
+                        width, height = value.size or _asset_size(value.sprite_path, default=(48, 36))
+                        x, y = target.value
+                        return QRectF(x, y, width, height)
+
+        # Editable scenes normally have a session.  Keep the standalone canvas
+        # useful without combining a fallback position with another item's
+        # geometry.
+        item = self._item_for_ref(ref)
+        return item.scene_rect() if item is not None else None
+
+    def _selectable_items_at(self, scene_pos: QPointF) -> list[SceneGraphicsItem]:
+        """Return authored candidates in the visual front-to-back order."""
+
+        candidates: list[SceneGraphicsItem] = []
+        # QGraphicsScene's descending order is its effective z/stacking order.
+        # Keep that order for equal-z items: construction order is stable and
+        # therefore supplies the deterministic tie-break.
+        for item in self.scene.items(scene_pos, Qt.ItemSelectionMode.IntersectsItemShape, Qt.SortOrder.DescendingOrder):
+            if not isinstance(item, SceneGraphicsItem) or item.ref is None:
+                continue
+            if item.ref.kind not in {"object", "look_region"} or item.ref in [candidate.ref for candidate in candidates]:
+                continue
+            candidates.append(item)
+        return candidates
+
+    def _resize_handle_at(self, scene_pos: QPointF) -> ResizeHandleItem | None:
+        for item in self.scene.items(scene_pos, Qt.ItemSelectionMode.IntersectsItemShape, Qt.SortOrder.DescendingOrder):
+            if isinstance(item, ResizeHandleItem) and item.isVisible():
+                return item
+        return None
+
+    def _handle_scene_pointer(self, phase: str, scene_pos: QPointF) -> bool:
+        """Own authored-item gestures so selection completes on release."""
+
+        if phase == "press":
+            handle = self._resize_handle_at(scene_pos)
+            if handle is not None:
+                self._pointer_gesture = {"kind": "resize", "handle": handle, "last_pos": QPointF(scene_pos)}
+                self._begin_resize(handle.owner, handle.corner, scene_pos)
+                return True
+
+            candidates = self._selectable_items_at(scene_pos)
+            if not candidates:
+                return False
+            self._pointer_gesture = {
+                "kind": "body",
+                "press_pos": QPointF(scene_pos),
+                "last_pos": QPointF(scene_pos),
+                "candidates": tuple(item.ref for item in candidates if item.ref is not None),
+                "target": None,
+                "dragging": False,
+                "start_geometry": None,
+                "item": None,
+            }
+            return True
+
+        gesture = self._pointer_gesture
+        if gesture is None:
+            return False
+        if gesture["kind"] == "resize":
+            if phase == "move":
+                handle = gesture["handle"]
+                gesture["last_pos"] = QPointF(scene_pos)
+                self._preview_resize(handle.owner, handle.corner, scene_pos)
+            elif phase == "release":
+                handle = gesture["handle"]
+                self._finish_resize(handle.owner, handle.corner, gesture.get("last_pos", scene_pos))
+                self._pointer_gesture = None
+            return True
+
+        if phase == "move":
+            gesture["last_pos"] = QPointF(scene_pos)
+            press_pos = gesture["press_pos"]
+            threshold = max(1.0, QApplication.startDragDistance() / self._current_zoom())
+            if not gesture["dragging"] and (scene_pos - press_pos).manhattanLength() >= threshold:
+                candidates = gesture["candidates"]
+                current_item = self._item_for_ref(self.selected_element) if self.selected_element is not None else None
+                target = current_item if current_item is not None and current_item.ref in candidates else (
+                    self._item_for_ref(candidates[0]) if candidates else None
+                )
+                if target is not None and target.ref is not None:
+                    gesture["target"] = target.ref
+                    gesture["item"] = target
+                    gesture["start_geometry"] = self._authoritative_item_geometry(target)
+                    gesture["dragging"] = True
+            if gesture["dragging"]:
+                self._preview_body_drag(gesture, scene_pos)
+            return True
+
+        if phase == "release":
+            try:
+                if gesture["dragging"]:
+                    self._finish_body_drag(gesture)
+                else:
+                    self._complete_body_click(scene_pos, gesture["candidates"])
+            finally:
+                self._pointer_gesture = None
+            return True
+        return True
+
+    @staticmethod
+    def _item_scene_geometry(item: SceneGraphicsItem) -> tuple[float, ...]:
+        rect = item.scene_rect()
+        if item.ref is not None and item.ref.kind == "look_region":
+            return rect.x(), rect.y(), rect.width(), rect.height()
+        return rect.x(), rect.y()
+
+    def _authoritative_item_geometry(self, item: SceneGraphicsItem) -> tuple[float, ...]:
+        if item.ref is not None:
+            bounds = self.scene_element_bounds(item.ref)
+            if bounds is not None:
+                if item.ref.kind == "look_region":
+                    return bounds.x(), bounds.y(), bounds.width(), bounds.height()
+                return bounds.x(), bounds.y()
+        return self._item_scene_geometry(item)
+
+    def _preview_body_drag(self, gesture: dict[str, Any], scene_pos: QPointF) -> None:
+        item = gesture.get("item")
+        start = gesture.get("start_geometry")
+        press_pos = gesture.get("press_pos")
+        if not isinstance(item, SceneGraphicsItem) or not isinstance(start, tuple) or not isinstance(press_pos, QPointF):
+            return
+        dx, dy = scene_pos.x() - press_pos.x(), scene_pos.y() - press_pos.y()
+        if item.ref is not None and item.ref.kind == "look_region":
+            preview = self._constrain_region_rect((start[0] + dx, start[1] + dy, start[2], start[3]))
+            item.set_scene_rect(QRectF(*preview))
+            self._sync_resize_handles()
+        else:
+            item.setPos(start[0] + dx, start[1] + dy)
+
+    def _finish_body_drag(self, gesture: dict[str, Any]) -> None:
+        item = gesture.get("item")
+        ref = gesture.get("target")
+        start = gesture.get("start_geometry")
+        if not isinstance(item, SceneGraphicsItem) or not isinstance(ref, SceneElementSelection):
+            return
+        geometry = self._item_scene_geometry(item)
+        if ref.kind == "look_region":
+            geometry = self._constrain_region_rect(geometry)  # type: ignore[arg-type]
+        geometry_int = tuple(_logical_int(value) for value in geometry)
+        if not self.commit_geometry(ref, geometry_int) and isinstance(start, tuple):
+            if ref.kind == "look_region":
+                self._restore_rect(item, tuple(float(value) for value in start))
+            else:
+                item.setPos(start[0], start[1])
+
+    def _complete_body_click(
+        self, scene_pos: QPointF, candidates: tuple[SceneElementSelection, ...]
+    ) -> None:
+        if not candidates:
+            self.select_element(None)
+            return
+        same_cycle = (
+            self._cycle_candidates == candidates
+            and self._cycle_point is not None
+            and (scene_pos - self._cycle_point).manhattanLength() < max(1.0, QApplication.startDragDistance() / self._current_zoom())
+        )
+        index = 0
+        if (same_cycle or self._cycle_point is None) and self.selected_element in candidates:
+            index = (candidates.index(self.selected_element) + 1) % len(candidates)
+        self.select_element(candidates[index])
+        self._cycle_candidates = candidates
+        self._cycle_point = QPointF(scene_pos)
+
     def _selection_changed(self) -> None:
+        # Qt can emit a selection change while a child handle is being moved.
+        # That transient event must not replace the active preview with the
+        # semantic baseline or clear the gesture's owner.
+        if self._resize_gesture is not None:
+            return
         selected = [item for item in self.scene.selectedItems() if isinstance(item, SceneGraphicsItem) and item.ref]
         ref = selected[-1].ref if selected else None
         self.selected_element = ref
@@ -711,7 +1066,22 @@ class SceneEditorWidget(QWidget):
             handle.setVisible(False)
         ref = self.selected_element
         item = self._item_for_ref(ref) if ref is not None else None
-        if ref is None or ref.kind != "look_region" or item is None or not item.editable:
+        if ref is None or item is None or not item.editable:
+            return
+        active_resize = self._resize_gesture
+        bounds = (
+            item.scene_rect()
+            if active_resize is not None and active_resize[0] is item and active_resize[0].ref == ref
+            else self.scene_element_bounds(ref)
+        )
+        if bounds is None:
+            return
+
+        # The selected graphics item is only a view.  Reapply the complete
+        # current scene rectangle on every selection/geometry refresh so a
+        # stale item rect cannot leak into the outline.
+        item.set_scene_rect(bounds)
+        if ref.kind != "look_region":
             return
         for corner in ("top_left", "top_right", "bottom_left", "bottom_right"):
             handle = self.resize_handles.get(corner)
@@ -724,13 +1094,23 @@ class SceneEditorWidget(QWidget):
                     self._finish_resize,
                 )
                 self.resize_handles[corner] = handle
+            elif handle.owner is not item:
+                # Handles are child items.  Reusing the old child without
+                # reparenting leaves it anchored to the previous region.
+                handle.setParentItem(item)
+                handle.owner = item
             handle.setVisible(True)
-            self._position_handle(item, handle, corner)
+            self._position_handle(item, handle, corner, bounds)
 
-    def _position_handle(self, owner: SceneGraphicsItem, handle: ResizeHandleItem, corner: str) -> None:
-        size = max(5.0, 10.0 / max(0.1, self._current_zoom()))
+    def _position_handle(
+        self, owner: SceneGraphicsItem, handle: ResizeHandleItem, corner: str, bounds: QRectF
+    ) -> None:
+        # A newly-created/offscreen view can briefly report a very small fit
+        # transform.  Without a cap, the resulting scene-space handle would
+        # cover most of the region and block legitimate overlap clicks.
+        size = min(16.0, max(5.0, 10.0 / max(0.1, self._current_zoom())))
         half = size / 2.0
-        width, height = owner.rect().width(), owner.rect().height()
+        width, height = bounds.width(), bounds.height()
         x = 0.0 if "left" in corner else width
         y = 0.0 if "top" in corner else height
         handle.setRect(-half, -half, size, size)
@@ -743,10 +1123,9 @@ class SceneEditorWidget(QWidget):
     def _begin_resize(self, owner: SceneGraphicsItem, corner: str, _scene_pos: QPointF) -> None:
         if owner.ref is None:
             return
-        target = self._geometry_target(owner.ref)
-        if target is None or target.shape != "rect":
+        bounds = self.scene_element_bounds(owner.ref)
+        if bounds is None:
             return
-        x, y, width, height = target.value
         # Handles are only visible for the selected region.  Avoid clearing
         # and rebuilding selection while Qt is dispatching the press event;
         # that used to make the active child item lose its gesture in some
@@ -755,21 +1134,26 @@ class SceneEditorWidget(QWidget):
             self.select_element(owner.ref, emit=False)
         self._resize_view_drag_mode = self.view.dragMode()
         self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
-        self._resize_gesture = (owner, corner, (float(x), float(y), float(width), float(height)))
+        self._resize_gesture = (
+            owner,
+            corner,
+            (float(bounds.x()), float(bounds.y()), float(bounds.width()), float(bounds.height())),
+        )
 
     def _preview_resize(self, owner: SceneGraphicsItem, corner: str, scene_pos: QPointF) -> None:
         gesture = self._resize_gesture
         if gesture is None or gesture[0] is not owner or gesture[1] != corner:
             return
         x, y, width, height = _resized_rect(gesture[2], corner, scene_pos.x(), scene_pos.y())
-        owner.setPos(x, y)
-        owner.setRect(0, 0, width, height)
+        x, y, width, height = self._constrain_region_rect((x, y, width, height))
+        preview_bounds = QRectF(x, y, width, height)
+        owner.set_scene_rect(preview_bounds)
         # Keep every affordance attached to the preview rectangle.  Updating
         # only the active handle leaves the opposite corners at stale scene
         # coordinates during a live drag.
         for handle_corner, handle in self.resize_handles.items():
             if handle.owner is owner:
-                self._position_handle(owner, handle, handle_corner)
+                self._position_handle(owner, handle, handle_corner, preview_bounds)
         owner.update()
 
     def _finish_resize(self, owner: SceneGraphicsItem, corner: str, scene_pos: QPointF) -> None:
@@ -779,13 +1163,7 @@ class SceneEditorWidget(QWidget):
         self._preview_resize(owner, corner, scene_pos)
         self._resize_gesture = None
         self._restore_resize_view_mode()
-        x, y = owner.scenePos().x(), owner.scenePos().y()
-        geometry = (
-            _logical_int(x),
-            _logical_int(y),
-            max(1, _logical_int(owner.rect().width())),
-            max(1, _logical_int(owner.rect().height())),
-        )
+        geometry = tuple(_logical_int(value) for value in owner.scene_rect().getRect())
         if not self.commit_geometry(owner.ref, geometry):
             self._restore_rect(owner, gesture[2])
 
@@ -815,12 +1193,8 @@ class SceneEditorWidget(QWidget):
         if item.ref.kind == "object":
             geometry: tuple[int, ...] = (_logical_int(item.scenePos().x()), _logical_int(item.scenePos().y()))
         elif item.ref.kind == "look_region":
-            geometry = (
-                _logical_int(item.scenePos().x()),
-                _logical_int(item.scenePos().y()),
-                max(1, _logical_int(item.rect().width())),
-                max(1, _logical_int(item.rect().height())),
-            )
+            geometry = tuple(_logical_int(value) for value in item.scene_rect().getRect())
+            geometry = tuple(_logical_int(value) for value in self._constrain_region_rect(geometry))
         else:
             item.setPos(start)
             return
@@ -839,6 +1213,11 @@ class SceneEditorWidget(QWidget):
             self._report_geometry_error("This scene element has no editable rectangular geometry.")
             return False
         new_value = tuple(int(value) for value in geometry)
+        if ref.kind == "look_region":
+            if len(new_value) != 4 or new_value[2] < 1 or new_value[3] < 1:
+                self._report_geometry_error("Look Region width and height must be at least 1.")
+                return False
+            new_value = tuple(_logical_int(value) for value in self._constrain_region_rect(new_value))
         if new_value == target.value:
             item = self._item_for_ref(ref)
             if item is not None:
@@ -896,11 +1275,11 @@ class SceneEditorWidget(QWidget):
 
     def _restore_rect(self, item: SceneGraphicsItem, geometry: tuple[float, float, float, float]) -> None:
         x, y, width, height = geometry
-        item.setPos(x, y)
-        item.setRect(0, 0, max(1.0, width), max(1.0, height))
+        item.set_scene_rect(QRectF(x, y, max(1.0, width), max(1.0, height)))
         self._sync_resize_handles()
 
     def cancel_gesture(self) -> None:
+        self._pointer_gesture = None
         gesture = self._resize_gesture
         self._resize_gesture = None
         if gesture is not None:

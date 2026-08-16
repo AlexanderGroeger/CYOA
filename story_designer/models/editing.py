@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
+from enum import Enum
 import re
 from typing import Any
 
@@ -30,6 +31,18 @@ from .project_session import DefinitionSelection
 
 
 PropertyPath = tuple[str | int, ...]
+
+
+class EditChangeKind(str, Enum):
+    """Invalidation scope for a semantic edit.
+
+    The Qt layer uses this metadata to distinguish an in-place value binding
+    from a mutation that changes the shape of an editor.  Project reloads are
+    deliberately handled outside commands by ``ProjectSession.load``.
+    """
+
+    VALUE = "value"
+    STRUCTURAL = "structural"
 
 
 def _copy(value: Any) -> Any:
@@ -605,6 +618,7 @@ class EditCommand:
     """Base class for explicit application-layer property mutations."""
 
     operation = "edit"
+    change_kind = EditChangeKind.VALUE
 
     def __init__(self, selection: DefinitionSelection, path: Sequence[str | int]) -> None:
         self.selection = selection
@@ -1066,6 +1080,7 @@ class StructuralEditCommand(EditCommand):
     """
 
     operation = "structural_edit"
+    change_kind = EditChangeKind.STRUCTURAL
 
     def __init__(self, selection: DefinitionSelection, collection_path: Sequence[str | int]) -> None:
         super().__init__(selection, collection_path)

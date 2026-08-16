@@ -1,0 +1,7 @@
+id: fixture_story
+title: Fixture Story
+version: "1.0"
+start_scene: intro
+display: {width: 320, height: 180}
+starting_flags: {visited: false}
+starting_variables: {coins: 0}

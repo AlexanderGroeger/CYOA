@@ -1,0 +1,5 @@
+moves:
+  - id: intro
+    name: Intro Strike
+    qte: {type: precision_bar}
+    future_move_extension: {preserves: true}

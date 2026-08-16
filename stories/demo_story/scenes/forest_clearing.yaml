@@ -41,35 +41,28 @@ exploration:
       all:
       - flag: acorn_collected
         equals: false
-    look:
-      interaction: action
-      rect:
-      - 490
-      - 50
-      - 50
-      - 50
-      event: grab_acorn
   look_regions:
   - id: stream
     rect:
-    - 229
-    - 308
+    - 227
+    - 306
     - 410
     - 50
     interaction: inspect
     event: inspect_stream
     priority: 2
-  - id: grab_acorn_region
+  - id: acorn_interaction
     rect:
-    - 447
-    - 40
-    - 120
-    - 72
-    interaction: inspect
-    event: grab_acorn
+    - 482
+    - 42
+    - 48
+    - 51
+    interaction: action
+    event: acorn_interaction_event
     visible_when:
-      flag: acorn_collected
-      not_equals: true
+      all:
+      - flag: acorn_collected
+        equals: false
   look_events:
     inspect_stream:
       actions:
@@ -87,3 +80,22 @@ exploration:
       - type: set_flag
         flag: acorn_collected
         value: true
+    acorn_interaction_event:
+      actions:
+      - type: move_object
+        target: acorn
+        position:
+        - 800
+        - 481
+        duration: 1.0
+      - type: dialog
+        dialog: grab_acorn
+        text: ''
+      - type: set_flag
+        flag: acorn_collected
+        value: true
+      - type: sound
+        file: got_item.wav
+      - type: give_item
+        item: acorn
+        quantity: 1

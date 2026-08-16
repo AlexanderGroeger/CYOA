@@ -12,12 +12,13 @@ from story_designer.models import DefinitionSelection, ProjectSession, PropertyD
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QEvent
+    from PySide6.QtCore import QEvent, QMimeData, QPointF
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
         QComboBox,
         QDoubleSpinBox,
+        QLabel,
         QLineEdit,
         QPlainTextEdit,
         QSpinBox,
@@ -323,6 +324,153 @@ def test_look_region_context_authors_interaction_event_actions_and_safe_rename(q
 
 
 @pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_look_region_action_reorder_is_queued_single_command_and_stress_safe(qapp, tmp_path: Path) -> None:
+    story_root, shared_root = write_fixture_story(tmp_path)
+    (story_root / "scenes" / "intro.yaml").write_text(
+        "id: intro\n"
+        "exploration:\n"
+        "  look_regions:\n"
+        "    - id: desk\n"
+        "      rect: [1, 2, 30, 20]\n"
+        "      interaction: action\n"
+        "      event: examine_desk\n"
+        "  look_events:\n"
+        "    examine_desk:\n"
+        "      actions:\n"
+        "        - {type: dialog, text: hello}\n"
+        "        - {type: set_flag, flag: opened, value: true}\n"
+        "        - {type: give_item, item: coin, quantity: 1}\n"
+        "        - {type: sound, file: click.wav}\n",
+        encoding="utf-8",
+    )
+    session = ProjectSession.from_path(story_root, shared_root)
+    selection = _selection(session, ContentKind.SCENE, "intro")
+    session.select(selection)
+    inspector = InspectorWidget(session)
+    inspector.set_selection(session.project, selection, session.definition(), session.diagnostics)
+    from story_designer.models import SceneElementSelection
+
+    region = SceneElementSelection("intro", "look_region", "desk")
+    inspector.set_scene_element(region, session.working_mapping(selection)["exploration"]["look_regions"][0])
+    def action_types() -> list[str]:
+        actions = session.working_mapping(selection)["exploration"]["look_events"]["examine_desk"]["actions"]
+        return [str(action["type"]) for action in actions]
+
+    expected = action_types()
+    history_before = len(session._history)
+    inspector.look_region_actions.move_requested.emit(1, 0)
+    # The semantic state and the Qt view are untouched until the native drop
+    # event has returned and the queued commit is dispatched.
+    assert action_types() == expected
+    qapp.processEvents()
+    expected.insert(0, expected.pop(1))
+    assert action_types() == expected
+    assert len(session._history) == history_before + 1
+    assert inspector.look_region_actions.currentRow() == 0
+    assert inspector.context_tabs.currentWidget() is inspector.look_region_context_page
+
+    def queued_move(source: int, target: int) -> None:
+        nonlocal expected
+        before = expected.copy()
+        inspector.look_region_actions.move_requested.emit(source, target)
+        assert action_types() == before
+        value = expected.pop(source)
+        expected.insert(target, value)
+        qapp.processEvents()
+        assert action_types() == expected
+
+    # The observed regression was specifically the flag action.  Cover both
+    # directions and both list boundaries before the randomized stress pass.
+    queued_move(0, 3)  # flag: first -> last
+    queued_move(3, 1)  # flag: last -> middle (upward)
+    queued_move(1, 0)  # flag: middle -> first (upward)
+    queued_move(0, 1)  # flag: first -> middle (downward)
+
+    # Exercise the flag and the other representative action payloads through
+    # repeated queued commits, keeping a local semantic model as the oracle.
+    before_last_move = expected.copy()
+    for operation in range(100):
+        if operation == 99:
+            before_last_move = expected.copy()
+        source = operation % len(expected)
+        target = (operation * 3 + 1) % len(expected)
+        if target == source:
+            target = (target + 1) % len(expected)
+        inspector.look_region_actions.move_requested.emit(source, target)
+        expected_value = expected.pop(source)
+        expected.insert(target, expected_value)
+        qapp.processEvents()
+        assert action_types() == expected
+        assert inspector.look_region_actions.count() == len(expected)
+
+    assert "set_flag" in expected
+    assert len(session._history) == history_before + 105
+    session.undo()
+    inspector._refresh_look_region_context()
+    qapp.processEvents()
+    assert action_types() == before_last_move
+    session.redo()
+    inspector._refresh_look_region_context()
+    qapp.processEvents()
+    assert action_types() == expected
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_action_list_drop_emits_intent_without_native_model_move(qapp) -> None:
+    from story_designer.widgets.inspector import _ActionListWidget
+
+    class Drop:
+        def __init__(self, source, point: QPointF) -> None:
+            self._source = source
+            self._point = point
+            self.accepted = False
+            self.ignored = False
+            self._mime = QMimeData()
+            self._mime.setData(_ActionListWidget._LIST_MIME_TYPE, b"rows")
+
+        def source(self):
+            return self._source
+
+        def mimeData(self):
+            return self._mime
+
+        def position(self):
+            return self._point
+
+        def acceptProposedAction(self):
+            self.accepted = True
+
+        def ignore(self):
+            self.ignored = True
+
+    actions = _ActionListWidget()
+    actions.addItems(["dialog", "set_flag", "give_item", "sound"])
+    actions.resize(240, 120)
+    actions.show()
+    qapp.processEvents()
+    actions.setCurrentRow(2)
+    actions._drag_source_row = 2
+    target_point = actions.visualItemRect(actions.item(0)).center()
+    moves: list[tuple[int, int]] = []
+    actions.move_requested.connect(lambda source, target: moves.append((source, target)))
+
+    drop = Drop(actions, QPointF(target_point))
+    actions.dropEvent(drop)
+    assert drop.accepted
+    assert not drop.ignored
+    assert moves == [(2, 0)]
+    assert [actions.item(index).text() for index in range(actions.count())] == [
+        "dialog", "set_flag", "give_item", "sound"
+    ]
+
+    external_drop = Drop(object(), QPointF(target_point))
+    actions.dropEvent(external_drop)
+    assert external_drop.ignored
+    assert moves == [(2, 0)]
+    actions.close()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
 def test_object_context_sprite_editor_does_not_duplicate_after_repeated_selection(qapp, tmp_path: Path) -> None:
     story_root, shared_root = write_fixture_story(tmp_path)
     (story_root / "scenes" / "intro.yaml").write_text(
@@ -351,3 +499,29 @@ def test_object_context_sprite_editor_does_not_duplicate_after_repeated_selectio
         inspector.clear_scene_element()
     qapp.processEvents()
     assert inspector.object_asset_form.rowCount() == 0
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_object_context_has_no_legacy_interaction_ui_after_migration(qapp, tmp_path: Path) -> None:
+    story_root, shared_root = write_fixture_story(tmp_path)
+    (story_root / "scenes" / "intro.yaml").write_text(
+        "id: intro\n"
+        "exploration:\n"
+        "  objects:\n"
+        "    - {id: lamp, position: [1, 2], sprite: lamp.png}\n",
+        encoding="utf-8",
+    )
+    session = ProjectSession.from_path(story_root, shared_root)
+    selection = _selection(session, ContentKind.SCENE, "intro")
+    session.select(selection)
+    inspector = InspectorWidget(session)
+    inspector.set_selection(session.project, selection, session.definition(), session.diagnostics)
+    from story_designer.models import SceneElementSelection
+
+    inspector.set_scene_element(
+        SceneElementSelection("intro", "object", "lamp"),
+        {"id": "lamp", "position": [1, 2], "sprite": "lamp.png"},
+    )
+    visible_text = " ".join(label.text() for label in inspector.object_context_page.findChildren(QLabel))
+    assert "legacy" not in visible_text.lower()
+    assert "interaction" not in visible_text.lower()

@@ -142,6 +142,11 @@ class WorkspaceWidget(QWidget):
             "Edit supported properties in the Inspector. Changes remain in memory until you save the story."
         )
 
+    def refresh_value_dependencies(self) -> None:
+        """Update value-dependent visuals without resetting an editor tab."""
+
+        self.scene_editor.refresh_value_dependencies()
+
     def open_dialogue_sequence(self, sequence_id: str) -> None:
         """Switch from a scene element to its local dialogue sequence."""
 

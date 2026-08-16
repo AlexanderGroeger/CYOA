@@ -1,101 +1,122 @@
 id: exploration_study
 music: overworld.mp3
-
-# This scene is intentionally not connected to demo_story's default route.
-# It is a content-authoring reference for the opt-in exploration mode.
 exploration:
   cursor_speed: 210
-  # The opening dialogue changes after the desk pickup has changed profile
-  # state, without scene-specific Python logic.
   dialog:
-    - conditions:
-        all:
-          - flag: study_token_found
-            equals: false
-      sequence: study_unsearched
-    - conditions:
-        all:
-          - flag: study_token_found
-            equals: true
-      sequence: study_searched
-
+  - conditions:
+      all:
+      - flag: study_token_found
+        equals: false
+    sequence: study_unsearched
+  - conditions:
+      all:
+      - flag: study_token_found
+        equals: true
+    sequence: study_searched
   dialogue_sequences:
     study_unsearched:
-      - "The archive study is quiet except for the ticking lamp. A small seal rests on the desk."
+    - The archive study is quiet except for the ticking lamp. A small seal rests on
+      the desk.
     study_searched:
-      - "The desk is bare now, but the old lamp still points toward a hidden route."
+    - The desk is bare now, but the old lamp still points toward a hidden route.
     inspect_bookcase:
-      - "Most of the books are accounting ledgers. One shelf is conspicuously dust-free."
+    - Most of the books are accounting ledgers. One shelf is conspicuously dust-free.
     unlock_archive:
-      - "The lamp flares. Somewhere behind the shelves, a latch releases."
+    - The lamp flares. Somewhere behind the shelves, a latch releases.
     take_ember_seal:
-      - "You pocket the Ember Seal. It may be important to whatever the lamp revealed."
-
+    - You pocket the Ember Seal. It may be important to whatever the lamp revealed.
   navigation:
-    - scene: exploration_hall
-      label: Hallway
-    - scene: exploration_archive
-      label: Hidden Archive
-      conditions:
-        all:
-          - flag: archive_route_open
-            equals: true
-
+  - scene: exploration_hall
+    label: Hallway
+  - scene: exploration_archive
+    label: Hidden Archive
+    conditions:
+      all:
+      - flag: archive_route_open
+        equals: true
   objects:
-    - id: archive_lamp
-      sprite: heart.png
-      position: [108, 78]
-      z: 4
-    - id: desk_ember_seal
-      sprite: heart.png
-      position: [316, 154]
-      z: 12
-      visible_when:
-        all:
-          - flag: study_token_found
-            equals: false
-      look:
-        interaction: action
-        rect: [312, 150, 24, 24]
-        event: take_ember_seal
-
+  - id: archive_lamp
+    sprite: heart.png
+    position:
+    - 108
+    - 78
+    z: 4
+  - id: desk_ember_seal
+    sprite: heart.png
+    position:
+    - 316
+    - 154
+    z: 12
+    visible_when:
+      all:
+      - flag: study_token_found
+        equals: false
   look_regions:
-    # These regions overlap intentionally. The higher-priority lamp switch
-    # consistently wins while the cursor is inside both rectangles.
-    - id: bookcase
-      rect: [70, 54, 140, 126]
-      interaction: inspect
-      event: inspect_bookcase
-      priority: 2
-    - id: lamp_switch
-      rect: [106, 76, 38, 36]
-      interaction: action
-      event: unlock_archive
-      priority: 20
-
+  - id: bookcase
+    rect:
+    - 70
+    - 54
+    - 140
+    - 126
+    interaction: inspect
+    event: inspect_bookcase
+    priority: 2
+  - id: lamp_switch
+    rect:
+    - 106
+    - 76
+    - 38
+    - 36
+    interaction: action
+    event: unlock_archive
+    priority: 20
+  - id: desk_ember_seal_interaction
+    rect:
+    - 312
+    - 150
+    - 24
+    - 24
+    interaction: action
+    event: desk_ember_seal_interaction_event
+    visible_when:
+      all:
+      - flag: study_token_found
+        equals: false
   look_events:
     inspect_bookcase:
       actions:
-        - type: dialog
-          dialog: inspect_bookcase
+      - type: dialog
+        dialog: inspect_bookcase
     unlock_archive:
       actions:
-        - type: dialog
-          dialog: unlock_archive
-        - type: sound
-          file: appear.wav
-        - type: set_flag
-          flag: archive_route_open
-          value: true
+      - type: dialog
+        dialog: unlock_archive
+      - type: sound
+        file: appear.wav
+      - type: set_flag
+        flag: archive_route_open
+        value: true
     take_ember_seal:
       actions:
-        - type: dialog
-          dialog: take_ember_seal
-        - type: sound
-          file: got_item.wav
-        - type: give_item
-          item: ember_seal
-          quantity: 1
-        - type: set_flag
-          flag: study_token_found
-          value: true
+      - type: dialog
+        dialog: take_ember_seal
+      - type: sound
+        file: got_item.wav
+      - type: give_item
+        item: ember_seal
+        quantity: 1
+      - type: set_flag
+        flag: study_token_found
+        value: true
+    desk_ember_seal_interaction_event:
+      actions:
+      - type: dialog
+        dialog: take_ember_seal
+      - type: sound
+        file: got_item.wav
+      - type: give_item
+        item: ember_seal
+        quantity: 1
+      - type: set_flag
+        flag: study_token_found
+        value: true

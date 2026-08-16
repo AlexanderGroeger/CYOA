@@ -446,3 +446,155 @@ def test_object_context_tab_edits_identity_transform_and_z_order(qapp, tmp_path:
     finally:
         window.session.revert_all()
         window.close()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_region_selection_overlay_switch_uses_one_complete_scene_rect(qapp, tmp_path: Path) -> None:
+    session, selection = _scene_session(tmp_path)
+    editor = SceneEditorWidget(session)
+    editor.set_scene(session.project, selection.id, session.working_mapping(selection))  # type: ignore[arg-type]
+
+    desk = SceneElementSelection("intro", "look_region", "desk")
+    assert editor.add_look_region()
+    stream = editor.selected_element
+    assert stream is not None and stream.kind == "look_region"
+    assert editor.commit_geometry(stream, (180, 8, 120, 18))
+
+    editor.select_element(desk)
+    editor.select_element(stream)
+    item = editor.look_region_items[stream.id]
+    assert item.scene_rect().getRect() == pytest.approx((180, 8, 120, 18))
+    expected_corners = {
+        "top_left": QPointF(180, 8),
+        "top_right": QPointF(300, 8),
+        "bottom_left": QPointF(180, 26),
+        "bottom_right": QPointF(300, 26),
+    }
+    for corner, expected in expected_corners.items():
+        assert editor.resize_handles[corner].sceneBoundingRect().center() == expected
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_region_selection_overlay_switches_both_directions_and_cycles_radically_different_regions(
+    qapp, tmp_path: Path
+) -> None:
+    session, selection = _scene_session(tmp_path)
+    editor = SceneEditorWidget(session)
+    editor.set_scene(session.project, selection.id, session.working_mapping(selection))  # type: ignore[arg-type]
+
+    refs = [SceneElementSelection("intro", "look_region", "desk")]
+    geometries = [(250, 10, 20, 20), (10, 110, 280, 40), (150, 35, 30, 120)]
+    assert editor.commit_geometry(refs[0], geometries[0])
+    for geometry in geometries[1:]:
+        assert editor.add_look_region()
+        ref = editor.selected_element
+        assert ref is not None and ref.kind == "look_region"
+        refs.append(ref)
+        assert editor.commit_geometry(ref, geometry)
+
+    def assert_overlay(ref: SceneElementSelection, geometry: tuple[int, int, int, int]) -> None:
+        editor.select_element(ref)
+        item = editor.look_region_items[ref.id]
+        assert item.scene_rect().getRect() == pytest.approx(geometry)
+        x, y, width, height = geometry
+        expected = {
+            "top_left": QPointF(x, y),
+            "top_right": QPointF(x + width, y),
+            "bottom_left": QPointF(x, y + height),
+            "bottom_right": QPointF(x + width, y + height),
+        }
+        for corner, point in expected.items():
+            handle = editor.resize_handles[corner]
+            assert handle.owner is item
+            assert handle.parentItem() is item
+            assert handle.sceneBoundingRect().center() == point
+
+    assert_overlay(refs[0], geometries[0])
+    assert_overlay(refs[1], geometries[1])
+    assert_overlay(refs[0], geometries[0])
+    for _ in range(100):
+        for ref, geometry in zip(refs, geometries):
+            assert_overlay(ref, geometry)
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_region_resize_after_cross_selection_uses_current_semantic_geometry_and_undo_redo_refreshes(
+    qapp, tmp_path: Path
+) -> None:
+    session, selection = _scene_session(tmp_path)
+    editor = SceneEditorWidget(session)
+    editor.set_scene(session.project, selection.id, session.working_mapping(selection))  # type: ignore[arg-type]
+    acorn = SceneElementSelection("intro", "look_region", "desk")
+    assert editor.commit_geometry(acorn, (250, 10, 20, 20))
+    assert editor.add_look_region()
+    stream = editor.selected_element
+    assert stream is not None and stream.kind == "look_region"
+    assert editor.commit_geometry(stream, (10, 110, 280, 40))
+
+    editor.select_element(acorn)
+    stream_item = editor.look_region_items[stream.id]
+    # Recreate the observed split: the stream item is at the right identity,
+    # but its view has retained the previous region's dimensions.
+    stream_item.set_scene_rect(QRectF(10, 110, 20, 20))
+    editor._begin_resize(stream_item, "bottom_right", QPointF(30, 130))
+    editor._preview_resize(stream_item, "bottom_right", QPointF(310, 160))
+    assert stream_item.scene_rect().getRect() == pytest.approx((10, 110, 300, 50))
+    editor._finish_resize(stream_item, "bottom_right", QPointF(310, 160))
+    assert session.working_mapping(selection)["exploration"]["look_regions"][1]["rect"] == [10, 110, 300, 50]
+
+    editor.select_element(stream)
+    assert editor.commit_geometry(stream, (10, 110, 280, 60))
+    session.undo()
+    editor._refresh_authoritative(stream)
+    assert editor.scene_element_bounds(stream).getRect() == pytest.approx((10, 110, 300, 50))
+    session.redo()
+    editor._refresh_authoritative(stream)
+    assert editor.scene_element_bounds(stream).getRect() == pytest.approx((10, 110, 280, 60))
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_object_selection_overlay_also_refreshes_from_current_working_geometry(qapp, tmp_path: Path) -> None:
+    session, selection = _scene_session(tmp_path)
+    editor = SceneEditorWidget(session)
+    editor.set_scene(session.project, selection.id, session.working_mapping(selection))  # type: ignore[arg-type]
+    ref = SceneElementSelection("intro", "object", "lamp")
+    item = editor.object_items[ref.id]
+    item.setPos(200, 140)
+    editor.select_element(ref)
+    assert item.scene_rect().getRect() == pytest.approx((40, 30, 24, 16))
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_completed_overlap_clicks_cycle_region_and_object_without_handle_pollution(qapp, tmp_path: Path) -> None:
+    session, selection = _scene_session(tmp_path)
+    editor = SceneEditorWidget(session)
+    editor.resize(760, 520)
+    editor.set_scene(session.project, selection.id, session.working_mapping(selection))  # type: ignore[arg-type]
+    editor.show()
+    qapp.processEvents()
+
+    region = SceneElementSelection("intro", "look_region", "desk")
+    object_ref = SceneElementSelection("intro", "object", "lamp")
+    editor.select_element(region)
+    point = editor.view.viewport().mapFrom(editor.view, editor.view.mapFromScene(QPointF(50, 35)))
+    QTest.mouseClick(editor.view.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    qapp.processEvents()
+    assert editor.selected_element == object_ref
+    QTest.mouseClick(editor.view.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    qapp.processEvents()
+    assert editor.selected_element == region
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_region_geometry_commands_constrain_bounds_but_objects_remain_unbounded(qapp, tmp_path: Path) -> None:
+    session, selection = _scene_session(tmp_path)
+    editor = SceneEditorWidget(session)
+    editor.set_scene(session.project, selection.id, session.working_mapping(selection))  # type: ignore[arg-type]
+    region = SceneElementSelection("intro", "look_region", "desk")
+
+    assert editor.commit_geometry(region, (300, 170, 90, 45))
+    assert session.working_mapping(selection)["exploration"]["look_regions"][0]["rect"] == [230, 135, 90, 45]
+
+    object_ref = SceneElementSelection("intro", "object", "lamp")
+    assert editor.commit_geometry(object_ref, (400, 250))
+    assert session.working_mapping(selection)["exploration"]["objects"][0]["position"] == [400, 250]

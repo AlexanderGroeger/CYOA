@@ -1,0 +1,19 @@
+id: intro
+background: bg.png
+exploration:
+  objects:
+    - id: lamp
+      sprite: lamp.png
+      position: [40, 30]
+      size: [24, 16]
+      z: 7
+      visible_when: {flag: lamp_on}
+    - id: missing
+      sprite: absent.png
+      position: [120, 80]
+      size: [30, 20]
+  look_regions:
+    - id: desk
+      rect: [20, 20, 90, 45]
+      interaction: inspect
+      priority: 2
