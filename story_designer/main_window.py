@@ -8,20 +8,38 @@ import tempfile
 from PySide6.QtCore import QProcess, QSettings, QTimer, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDockWidget,
     QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
+    QSpinBox,
+    QInputDialog,
     QVBoxLayout,
     QWidget,
 )
 
-from engine.story_core import ContentKind, StoryCoreError, StoryProjectLoadError
+from engine.story_core import (
+    DEFAULT_HEIGHT,
+    DEFAULT_WIDTH,
+    ContentKind,
+    NewStorySpec,
+    ProjectCreationError,
+    StoryCoreError,
+    StoryProjectLoadError,
+    create_story_project,
+    create_top_level_definition,
+    slugify_story_id,
+)
+from engine.battle.qte import registered_qte_types
 
 from .models import (
     DefinitionSelection,
@@ -32,7 +50,7 @@ from .models import (
     normalize_story_root,
 )
 from .widgets import AssetBrowserWidget, DiagnosticsWidget, InspectorWidget, ProjectBrowser, WorkspaceWidget
-from .models import SceneGraphEdge
+from .models import SceneElementSelection, SceneGraphEdge
 from .widgets.test_state import TestStateDialog
 from .services.runtime_test import (
     BattleTestLaunch,
@@ -79,6 +97,8 @@ class MainWindow(QMainWindow):
         self._create_docks()
         self._create_menus()
         self.browser.selection_changed.connect(self._on_browser_selection)
+        self.workspace.new_story_requested.connect(self.new_story)
+        self.workspace.open_story_requested.connect(self.open_story)
         self.workspace.scene_element_selected.connect(self._on_scene_element_selection)
         self.workspace.scene_editor.geometry_committed.connect(lambda _ref: self._refresh_views())
         self.workspace.scene_editor.structure_changed.connect(lambda _ref: self._refresh_views())
@@ -86,6 +106,8 @@ class MainWindow(QMainWindow):
         self.workspace.scene_editor.open_destination_scene.connect(self._open_destination_scene)
         self.workspace.dialogue_changed.connect(lambda _ref: self._refresh_views())
         self.workspace.dialogue_entry_selected.connect(lambda _ref: self.inspector.clear_scene_element())
+        self.inspector.open_dialogue_sequence.connect(self.workspace.open_dialogue_sequence)
+        self.inspector.scene_element_renamed.connect(self._on_scene_element_renamed)
         self.workspace.graph_scene_selected.connect(self._on_graph_selection)
         self.workspace.graph_scene_open_requested.connect(self._open_graph_scene)
         self.workspace.graph_open_navigation.connect(self._open_graph_navigation)
@@ -122,6 +144,10 @@ class MainWindow(QMainWindow):
 
     def _create_menus(self) -> None:
         file_menu = self.menuBar().addMenu("File")
+        self.new_story_action = QAction("New Story...", self)
+        self.new_story_action.setShortcut(QKeySequence("Ctrl+N"))
+        self.new_story_action.triggered.connect(self.new_story)
+        file_menu.addAction(self.new_story_action)
         self.open_action = QAction("Open Story...", self)
         self.open_action.triggered.connect(self.open_story)
         file_menu.addAction(self.open_action)
@@ -140,11 +166,11 @@ class MainWindow(QMainWindow):
         self.save_action = QAction("Save", self)
         self.save_action.setShortcut(QKeySequence.StandardKey.Save)
         self.save_action.triggered.connect(self.save_story)
-        file_menu.insertAction(self.close_action, self.save_action)
+        file_menu.addAction(self.save_action)
         self.save_all_action = QAction("Save All", self)
         self.save_all_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
         self.save_all_action.triggered.connect(self.save_all_story)
-        file_menu.insertAction(self.close_action, self.save_all_action)
+        file_menu.addAction(self.save_all_action)
         self.exit_action = QAction("Exit", self)
         self.exit_action.triggered.connect(self.close)
         file_menu.addAction(self.exit_action)
@@ -178,6 +204,22 @@ class MainWindow(QMainWindow):
         validate_action = QAction("Validate Story", self)
         validate_action.triggered.connect(self.validate_story)
         story_menu.addAction(validate_action)
+        story_menu.addSeparator()
+        self.new_scene_action = QAction("New Scene...", self)
+        self.new_scene_action.triggered.connect(lambda: self.new_definition(ContentKind.SCENE))
+        story_menu.addAction(self.new_scene_action)
+        self.new_item_action = QAction("New Item...", self)
+        self.new_item_action.triggered.connect(lambda: self.new_definition(ContentKind.ITEM))
+        story_menu.addAction(self.new_item_action)
+        self.new_battle_action = QAction("New Battle...", self)
+        self.new_battle_action.triggered.connect(lambda: self.new_definition(ContentKind.BATTLE))
+        story_menu.addAction(self.new_battle_action)
+        self.new_move_action = QAction("New Combat Move...", self)
+        self.new_move_action.triggered.connect(lambda: self.new_definition(ContentKind.MOVE))
+        story_menu.addAction(self.new_move_action)
+        self.new_event_pool_action = QAction("New Event Pool...", self)
+        self.new_event_pool_action.triggered.connect(lambda: self.new_definition(ContentKind.EVENT_POOL))
+        story_menu.addAction(self.new_event_pool_action)
         scene_menu = self.menuBar().addMenu("Scene")
         scene_menu.addAction(self.workspace.scene_editor.add_object_action)
         scene_menu.addAction(self.workspace.scene_editor.add_look_region_action)
@@ -220,11 +262,79 @@ class MainWindow(QMainWindow):
             if path is not None:
                 self.open_story_path(path)
 
+    def new_story(self) -> None:
+        """Collect a small project specification and create it through Core."""
+
+        dialog = NewStoryDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        spec = dialog.specification
+        if spec is None or not self._confirm_unsaved_changes("create a new story"):
+            return
+        try:
+            root = create_story_project(spec)
+        except (ProjectCreationError, OSError, ValueError, TypeError) as exc:
+            QMessageBox.critical(self, "Could not create story", str(exc))
+            return
+        if not self.open_story_path(root):
+            return
+        project = self.session.project
+        if project is not None and project.index is not None:
+            entry = project.index.entry(ContentKind.SCENE, spec.start_scene_id)
+            if entry is not None:
+                self.session.select(DefinitionSelection(ContentKind.SCENE, spec.start_scene_id, entry.source))
+                self.workspace.open_scene_editor()
+                self._refresh_views()
+        self.statusBar().showMessage(f"Created {spec.title}")
+
     def open_story_directory(self) -> None:
         initial = self.settings.value("lastStoryPath", "")
         path = QFileDialog.getExistingDirectory(self, "Open Story Directory", str(initial))
         if path:
             self.open_story_path(Path(path))
+
+    def new_definition(self, kind: ContentKind) -> None:
+        """Create a persisted top-level definition, then reload and select it."""
+
+        if self.session.story_root is None:
+            return
+        if not self._confirm_unsaved_changes(f"create a new {kind.value.replace('_', ' ')}"):
+            return
+        identifier: str | None = None
+        qte_type = "precision_bar"
+        if kind is ContentKind.MOVE:
+            dialog = NewCombatMoveDialog(self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            identifier, qte_type = dialog.identifier, dialog.qte_type
+        else:
+            label = f"{kind.value.replace('_', ' ').title()} ID:"
+            identifier, accepted = QInputDialog.getText(self, f"New {kind.value.replace('_', ' ').title()}", label)
+            if not accepted:
+                return
+        try:
+            result = create_top_level_definition(
+                self.session.story_root,
+                kind,
+                identifier or "",
+                qte_type=qte_type,
+                shared_assets_root=self.session.shared_assets_root or "shared_assets",
+            )
+            self.session.reload(self.session.shared_assets_root)
+        except (ProjectCreationError, StoryProjectLoadError, StoryCoreError, OSError, ValueError, TypeError) as exc:
+            QMessageBox.critical(self, "Could not create definition", str(exc))
+            return
+        entry = self.session.project.index.entry(kind, result.identifier) if self.session.project and self.session.project.index else None
+        if entry is not None:
+            self.session.select(DefinitionSelection(kind, result.identifier, entry.source))
+        self._refresh_views()
+        if kind is ContentKind.SCENE:
+            self.workspace.open_scene_editor()
+        elif kind is ContentKind.BATTLE:
+            self.workspace.open_battle_editor()
+        elif kind is ContentKind.MOVE:
+            self.workspace.open_combat_move_editor()
+        self.statusBar().showMessage(f"Created {kind.value.replace('_', ' ')} {result.identifier}")
 
     def open_story_path(self, path: str | Path) -> bool:
         if not self._confirm_unsaved_changes("open another story"):
@@ -847,6 +957,15 @@ class MainWindow(QMainWindow):
             return
         editor.commit_geometry(selection, geometry)
 
+    def _on_scene_element_renamed(self, selection: object, new_id: str) -> None:
+        """Restore graphical selection after an atomic local-ID rename."""
+
+        if not hasattr(selection, "scene_id") or not hasattr(selection, "kind"):
+            return
+        ref = SceneElementSelection(selection.scene_id, selection.kind, str(new_id))
+        self._refresh_views()
+        self.workspace.scene_editor.select_element(ref)
+
     def _on_inspector_state_changed(self) -> None:
         """Refresh shell chrome without rebuilding the active editor form."""
 
@@ -926,6 +1045,14 @@ class MainWindow(QMainWindow):
             has_project and (self._test_context_valid or self.test_process_running)
         )
         self.stop_test_action.setEnabled(self.test_process_running)
+        for action in (
+            self.new_scene_action,
+            self.new_item_action,
+            self.new_battle_action,
+            self.new_move_action,
+            self.new_event_pool_action,
+        ):
+            action.setEnabled(has_project)
 
     def _restore_window_state(self) -> None:
         geometry = self.settings.value("windowGeometry")
@@ -995,6 +1122,129 @@ class MainWindow(QMainWindow):
             path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+class NewStoryDialog(QDialog):
+    """Native desktop form for the small, schema-backed new-project spec."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("New Story")
+        self.setModal(True)
+        self.resize(520, 260)
+        self.specification: NewStorySpec | None = None
+
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("Mystery at Grey Manor")
+        self.id_edit = QLineEdit()
+        self.id_edit.setPlaceholderText("mystery_at_grey_manor")
+        self.location_edit = QLineEdit()
+        self.location_edit.setText(str(Path.cwd()))
+        self.location_edit.setPlaceholderText("Choose the parent folder for the new story")
+        self.location_button = QPushButton("Browse...")
+        location_row = QWidget()
+        location_layout = QHBoxLayout(location_row)
+        location_layout.setContentsMargins(0, 0, 0, 0)
+        location_layout.addWidget(self.location_edit)
+        location_layout.addWidget(self.location_button)
+
+        self.width_spin = QSpinBox()
+        self.width_spin.setRange(1, 8192)
+        self.width_spin.setValue(DEFAULT_WIDTH)
+        self.height_spin = QSpinBox()
+        self.height_spin.setRange(1, 8192)
+        self.height_spin.setValue(DEFAULT_HEIGHT)
+        self.start_scene_edit = QLineEdit("start")
+
+        form = QFormLayout()
+        form.addRow("Story Name:", self.name_edit)
+        form.addRow("Story ID:", self.id_edit)
+        form.addRow("Project Folder:", location_row)
+        form.addRow("Logical Width:", self.width_spin)
+        form.addRow("Logical Height:", self.height_spin)
+        form.addRow("Start Scene ID:", self.start_scene_edit)
+
+        note = QLabel("The project folder is the parent; a new directory named Story Name will be created inside it.")
+        note.setWordWrap(True)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Create")
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        self.location_button.clicked.connect(self._choose_location)
+        self.name_edit.textChanged.connect(self._suggest_id)
+        self._suggested_id = ""
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(note)
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+
+    def _suggest_id(self, title: str) -> None:
+        current = self.id_edit.text().strip()
+        if not current or current == self._suggested_id:
+            self._suggested_id = slugify_story_id(title)
+            self.id_edit.setText(self._suggested_id)
+
+    def _choose_location(self) -> None:
+        initial = self.location_edit.text().strip() or str(Path.cwd())
+        path = QFileDialog.getExistingDirectory(self, "Choose project folder", initial)
+        if path:
+            self.location_edit.setText(path)
+
+    def _accept(self) -> None:
+        try:
+            spec = NewStorySpec(
+                title=self.name_edit.text(),
+                story_id=self.id_edit.text(),
+                destination=self.location_edit.text(),
+                width=self.width_spin.value(),
+                height=self.height_spin.value(),
+                start_scene_id=self.start_scene_edit.text(),
+            )
+            spec.validate()
+        except (ProjectCreationError, OSError, ValueError, TypeError) as exc:
+            QMessageBox.warning(self, "Invalid new story", str(exc))
+            return
+        self.specification = spec
+        self.accept()
+
+
+# The name is useful to callers that prefer the wizard terminology while the
+# compact form remains a normal native dialog.
+NewStoryWizard = NewStoryDialog
+
+
+class NewCombatMoveDialog(QDialog):
+    """Collect the two values needed for a canonical modern combat move."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("New Combat Move")
+        self.setModal(True)
+        self.identifier = ""
+        self.qte_type = "precision_bar"
+        self.id_edit = QLineEdit()
+        self.qte_combo = QComboBox()
+        self.qte_combo.addItems(list(registered_qte_types()))
+        form = QFormLayout()
+        form.addRow("Move ID:", self.id_edit)
+        form.addRow("QTE Type:", self.qte_combo)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Create")
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+
+    def _accept(self) -> None:
+        value = self.id_edit.text().strip()
+        if not value:
+            QMessageBox.warning(self, "Invalid combat move", "Move ID cannot be empty.")
+            return
+        self.identifier = value
+        self.qte_type = self.qte_combo.currentText()
+        self.accept()
 
 
 class StorySelectionDialog(QDialog):

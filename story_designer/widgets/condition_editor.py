@@ -34,6 +34,7 @@ from ..models.condition_editor import (
     NODE_TYPES,
     PARAMETER_TYPES,
     condition_mode,
+    condition_symbol_candidates,
 )
 
 
@@ -392,18 +393,12 @@ class ConditionEditorWidget(QWidget):
         self._apply_model_operation(self.model.set_parameter, path, key, value)
 
     def _suggestions(self, kind: str) -> list[str]:
-        if self.symbols is None:
-            values: list[str] = []
-        elif kind == "flag":
-            values = list(getattr(self.symbols, "declared_flags", ())) + list(getattr(self.symbols, "referenced_flags", ()))
-        elif kind in {"variable", "var"}:
-            values = list(getattr(self.symbols, "declared_variables", ())) + list(getattr(self.symbols, "referenced_variables", ()))
-        else:
-            values = list(getattr(self.symbols, "referenced_items", ()))
+        values = list(condition_symbol_candidates(self.symbols, kind))
+        if kind == "has_item":
             project_items = getattr(self.project, "items", {})
             if isinstance(project_items, Mapping):
                 values.extend(str(value) for value in project_items)
-        return list(dict.fromkeys(sorted(str(value) for value in values)))
+        return list(dict.fromkeys(sorted(values)))
 
     @staticmethod
     def _add_type_items(combo: QComboBox, *, include_groups: bool = True) -> None:

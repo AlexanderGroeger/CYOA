@@ -12,11 +12,12 @@ from story_designer.models import DefinitionSelection, ProjectSession, SceneElem
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QPointF
-    from PySide6.QtGui import QColor, QImage
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import QPointF, QRectF, Qt
+    from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QGraphicsScene
     from story_designer.main_window import MainWindow
-    from story_designer.widgets import SceneEditorWidget, WorkspaceWidget
+    from story_designer.widgets import SceneEditorWidget, SceneGraphicsItem, WorkspaceWidget
 except ImportError:  # pragma: no cover - retained for minimal Core-only environments
     QApplication = None  # type: ignore[assignment]
 
@@ -84,6 +85,58 @@ def test_scene_canvas_uses_logical_dimensions_and_authored_geometry(qapp, tmp_pa
 
 
 @pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_scene_editor_renders_background_and_object_pixmaps_headlessly(qapp, tmp_path: Path) -> None:
+    session, selection = _scene_session(tmp_path)
+    sprite = QImage(24, 16, QImage.Format.Format_RGBA8888)
+    sprite.fill(QColor("#d1495b"))
+    assert sprite.save(str(session.story_root / "assets" / "sprites" / "lamp.png"))
+    editor = SceneEditorWidget(session)
+    editor.set_scene(session.project, selection.id, session.working_mapping(selection))  # type: ignore[arg-type]
+
+    rendered = QImage(320, 180, QImage.Format.Format_RGBA8888)
+    rendered.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(rendered)
+    try:
+        editor.scene.render(painter, QRectF(0, 0, 320, 180), QRectF(0, 0, 320, 180))
+    finally:
+        painter.end()
+
+    assert rendered.pixelColor(10, 10) == QColor("#355070")
+    object_pixmap = editor.object_items["lamp"].pixmap
+    assert object_pixmap is not None and not object_pixmap.isNull()
+
+    sprite_scene = QGraphicsScene()
+    sprite_scene.addItem(SceneGraphicsItem((0, 0, 24, 16), pixmap=object_pixmap))
+    sprite_rendered = QImage(24, 16, QImage.Format.Format_RGBA8888)
+    sprite_rendered.fill(Qt.GlobalColor.transparent)
+    sprite_painter = QPainter(sprite_rendered)
+    try:
+        sprite_scene.render(sprite_painter, QRectF(0, 0, 24, 16), QRectF(0, 0, 24, 16))
+    finally:
+        sprite_painter.end()
+    assert sprite_rendered.pixelColor(12, 8) == QColor("#d1495b")
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_scene_graphics_item_scales_pixmap_to_rectf_target(qapp) -> None:
+    source = QImage(2, 3, QImage.Format.Format_RGBA8888)
+    source.fill(QColor("#d1495b"))
+    item = SceneGraphicsItem((1, 2, 17, 11), pixmap=QPixmap.fromImage(source))
+    scene = QGraphicsScene()
+    scene.addItem(item)
+
+    rendered = QImage(20, 16, QImage.Format.Format_RGBA8888)
+    rendered.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(rendered)
+    try:
+        scene.render(painter, QRectF(0, 0, 20, 16), QRectF(0, 0, 20, 16))
+    finally:
+        painter.end()
+
+    assert rendered.pixelColor(8, 7) == QColor("#d1495b")
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
 def test_scene_selection_and_missing_conditional_content_are_explicit(qapp, tmp_path: Path) -> None:
     session, selection = _scene_session(tmp_path)
     editor = SceneEditorWidget(session)
@@ -110,10 +163,28 @@ def test_workspace_renders_current_scene_working_mapping_and_inspector_context(q
     workspace.set_state(session.project, selection, session.definition(), session.diagnostics)
     assert workspace.tabs.currentWidget() is workspace.scene_editor
 
+    replacement = QImage(24, 16, QImage.Format.Format_RGBA8888)
+    replacement.fill(QColor("#4f772d"))
+    assert replacement.save(str(session.story_root / "assets" / "backgrounds" / "new_bg.png"))
     session.apply_command(SetPropertyCommand(selection, ("background",), "new_bg.png"))
     workspace.set_state(session.project, selection, session.definition(), session.diagnostics)
     assert workspace.scene_editor.presentation is not None
     assert workspace.scene_editor.presentation.background == "new_bg.png"
+    assert session.working_mapping(selection)["background"] == "new_bg.png"
+
+    background = next(
+        item for item in workspace.scene_editor.scene.items()
+        if isinstance(item, SceneGraphicsItem) and item.zValue() == -10000
+    )
+    assert background.pixmap is not None and not background.pixmap.isNull()
+    rendered = QImage(320, 180, QImage.Format.Format_RGBA8888)
+    rendered.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(rendered)
+    try:
+        workspace.scene_editor.scene.render(painter, QRectF(0, 0, 320, 180), QRectF(0, 0, 320, 180))
+    finally:
+        painter.end()
+    assert rendered.pixelColor(10, 10) == QColor("#4f772d")
 
 
 @pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
@@ -252,3 +323,91 @@ def test_graphical_geometry_save_reload_and_missing_asset_object(qapp, tmp_path:
     assert entry is not None
     reloaded_selection = DefinitionSelection(ContentKind.SCENE, "intro", entry.source)
     assert reloaded.working_mapping(reloaded_selection)["exploration"]["objects"][0]["position"] == [205, 90]
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_qt_corner_handle_drag_previews_and_commits_one_resize(qapp, tmp_path: Path) -> None:
+    session, selection = _scene_session(tmp_path)
+    editor = SceneEditorWidget(session)
+    editor.resize(760, 520)
+    editor.set_scene(session.project, selection.id, session.working_mapping(selection))  # type: ignore[arg-type]
+    ref = SceneElementSelection("intro", "look_region", "desk")
+    editor.select_element(ref)
+    editor.show()
+    qapp.processEvents()
+
+    owner = editor.look_region_items["desk"]
+    handle = editor.resize_handles["bottom_right"]
+    start = editor.view.viewport().mapFrom(editor.view, editor.view.mapFromScene(handle.sceneBoundingRect().center()))
+    end = editor.view.viewport().mapFrom(editor.view, editor.view.mapFromScene(QPointF(140, 90)))
+    QTest.mousePress(editor.view.viewport(), Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(editor.view.viewport(), end)
+    qapp.processEvents()
+    assert owner.rect().width() > 90
+    assert owner.rect().height() > 45
+    assert not session.can_undo
+    preview_geometry = (
+        round(owner.scenePos().x()),
+        round(owner.scenePos().y()),
+        round(owner.rect().width()),
+        round(owner.rect().height()),
+    )
+
+    QTest.mouseRelease(editor.view.viewport(), Qt.MouseButton.LeftButton, pos=end)
+    qapp.processEvents()
+    assert session.working_mapping(selection)["exploration"]["look_regions"][0]["rect"] == list(preview_geometry)
+    assert len(session._history) == 1
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_look_region_spinbox_step_is_immediate_and_contextual(qapp, tmp_path: Path) -> None:
+    session, selection = _scene_session(tmp_path)
+    window = MainWindow()
+    try:
+        window.session.load(session.story_root, session.shared_assets_root)
+        window.session.select(selection)
+        window._refresh_views()
+        ref = SceneElementSelection("intro", "look_region", "desk")
+        window.workspace.scene_editor.select_element(ref)
+        qapp.processEvents()
+
+        assert window.inspector.context_tabs.currentWidget() is window.inspector.look_region_context_page
+        assert window.inspector.context_tabs.isTabVisible(1)
+        width = window.inspector._scene_geometry_fields["width"]
+        width.stepUp()
+        qapp.processEvents()
+
+        assert window.session.working_mapping(selection)["exploration"]["look_regions"][0]["rect"][2] == 91
+        assert window.workspace.scene_editor.look_region_items["desk"].rect().width() == 91
+        assert window.workspace.scene_editor.selected_element == ref
+        assert len(window.session._history) == 1
+        assert not window.inspector._scene_geometry_fields["width"].isWindow()
+
+        height = window.inspector._scene_geometry_fields["height"]
+        height.lineEdit().selectAll()
+        QTest.keyClicks(height.lineEdit(), "120")
+        assert window.session.working_mapping(selection)["exploration"]["look_regions"][0]["rect"][3] == 45
+        QTest.keyClick(height.lineEdit(), Qt.Key.Key_Return)
+        qapp.processEvents()
+        assert window.session.working_mapping(selection)["exploration"]["look_regions"][0]["rect"][3] == 120
+        assert len(window.session._history) == 2
+
+        before = {id(widget) for widget in qapp.topLevelWidgets()}
+        assert window.workspace.scene_editor.add_look_region()
+        qapp.processEvents()
+        after = {id(widget) for widget in qapp.topLevelWidgets()}
+        unexpected_visible = [
+            widget for widget in qapp.topLevelWidgets()
+            if id(widget) in after - before and widget.isVisible() and widget is not window
+        ]
+        assert not unexpected_visible
+        created_ref = window.workspace.scene_editor.selected_element
+        assert created_ref is not None and created_ref.kind == "look_region"
+        assert window.inspector.context_tabs.currentWidget() is window.inspector.look_region_context_page
+        assert len(window.workspace.scene_editor.resize_handles) == 4
+        window.workspace.scene_editor.select_element(None)
+        assert not window.inspector.context_tabs.isTabVisible(1)
+        assert window.inspector.context_tabs.currentWidget() is window.inspector.scene_context_page
+    finally:
+        window.session.revert_all()
+        window.close()

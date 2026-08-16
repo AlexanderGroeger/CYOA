@@ -29,19 +29,39 @@ NODE_TYPES = GROUP_TYPES + LEAF_TYPES
 PARAMETER_TYPES = STRUCTURED_LEAF_PARAMETERS
 
 
+def condition_symbol_candidates(symbols: Any | None, kind: str) -> tuple[str, ...]:
+    """Return editable suggestions from the current project-symbol shape.
+
+    ``ProjectSymbols`` intentionally separates declarations from references
+    because flags and variables are dynamic.  The condition editor only needs
+    the union for suggestions; the line edit remains editable so new names
+    are still valid.  Keeping this translation here prevents Qt widgets and
+    condition nodes from depending on that storage detail.
+    """
+
+    if symbols is None:
+        return ()
+    normalized = str(kind).strip().lower()
+    if normalized == "flag":
+        attributes = ("declared_flags", "referenced_flags")
+    elif normalized in {"variable", "var"}:
+        attributes = ("declared_variables", "referenced_variables")
+    elif normalized == "has_item":
+        attributes = ("referenced_items",)
+    else:
+        return ()
+    values: set[str] = set()
+    for attribute in attributes:
+        values.update(str(value) for value in getattr(symbols, attribute, ()) or ())
+    return tuple(sorted(values))
+
+
 def _copy(value: Any) -> Any:
     return MISSING if value is MISSING else deepcopy(value)
 
 
 def _default_name(kind: str, symbols: "ConditionSymbolsLike | None") -> str:
-    values: Iterable[str] = ()
-    if symbols is not None:
-        if kind == "flag":
-            values = symbols.flags
-        elif kind in {"variable", "var"}:
-            values = symbols.variables
-        elif kind == "has_item":
-            values = symbols.items
+    values: Iterable[str] = condition_symbol_candidates(symbols, kind)
     return sorted(str(value) for value in values)[0] if values else {
         "flag": "flag_name",
         "variable": "variable_name",
@@ -51,11 +71,13 @@ def _default_name(kind: str, symbols: "ConditionSymbolsLike | None") -> str:
 
 
 class ConditionSymbolsLike:
-    """Structural protocol without importing the Core dataclass at runtime."""
+    """Structural protocol for project symbols used by the editor."""
 
-    flags: Iterable[str]
-    variables: Iterable[str]
-    items: Iterable[str]
+    declared_flags: Iterable[str]
+    declared_variables: Iterable[str]
+    referenced_flags: Iterable[str]
+    referenced_variables: Iterable[str]
+    referenced_items: Iterable[str]
 
 
 @dataclass
@@ -343,4 +365,5 @@ __all__ = [
     "PARAMETER_TYPES",
     "condition_mode",
     "validate_condition_value",
+    "condition_symbol_candidates",
 ]

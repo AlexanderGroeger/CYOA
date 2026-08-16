@@ -12,6 +12,7 @@ from story_designer.models import DefinitionSelection, ProjectSession, PropertyD
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
+    from PySide6.QtCore import QEvent
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -23,6 +24,7 @@ try:
     )
     from story_designer.widgets import InspectorWidget
     from story_designer.widgets.property_editors import AssetPathEditor, PropertyEditorFactory, ReferenceComboBox
+    from shiboken6 import isValid
 except ImportError:  # pragma: no cover - retained for minimal Core-only environments
     QApplication = None  # type: ignore[assignment]
 
@@ -191,3 +193,130 @@ def test_nested_object_scalar_uses_full_path_and_routes_through_session(qapp, tm
     assert ("inspector_settings", "value") in inspector._rows
     inspector._rows[("inspector_settings", "value")].editor.value_edited.emit(4)
     assert session.working_mapping(selection)["inspector_settings"] == {"value": 4}
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_persistent_inspector_sections_survive_repeated_selection_refreshes(qapp, tmp_path: Path) -> None:
+    session = _session(tmp_path)
+    inspector = InspectorWidget(session)
+    geometry_box = inspector.scene_geometry_box
+    condition_box = inspector.scene_condition_box
+    selections = (
+        _selection(session, ContentKind.SCENE, "intro"),
+        _selection(session, ContentKind.ITEM, "intro"),
+        _selection(session, ContentKind.BATTLE, "intro"),
+        _selection(session, ContentKind.MOVE, "intro"),
+    )
+
+    for _ in range(20):
+        for selection in selections:
+            session.select(selection)
+            inspector.set_selection(session.project, selection, session.definition(), session.diagnostics)
+            assert isValid(geometry_box)
+            assert isValid(condition_box)
+            geometry_box.hide()
+            geometry_box.show()
+            condition_box.hide()
+            condition_box.show()
+
+    qapp.processEvents()
+    assert isValid(geometry_box)
+    assert isValid(condition_box)
+    geometry_box.hide()
+    geometry_box.show()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_scene_element_dynamic_controls_are_rebuilt_inside_persistent_geometry_box(
+    qapp, tmp_path: Path
+) -> None:
+    from story_designer.models import SceneElementSelection
+
+    session = _session(tmp_path)
+    selection = _selection(session, ContentKind.SCENE, "intro")
+    session.select(selection)
+    inspector = InspectorWidget(session)
+    inspector.set_selection(session.project, selection, session.definition(), session.diagnostics)
+    geometry_box = inspector.scene_geometry_box
+
+    object_ref = SceneElementSelection("intro", "object", "lamp")
+    look_ref = SceneElementSelection("intro", "look_region", "desk")
+    inspector.set_scene_element(object_ref, {"id": "lamp", "position": [10, 20], "sprite": "lamp.png"})
+    first_editor = inspector._scene_geometry_fields["x"]
+    inspector.set_scene_element(look_ref, {"id": "desk", "rect": [1, 2, 30, 20]})
+    qapp.processEvents()
+    qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert not isValid(first_editor)
+    assert isValid(geometry_box)
+    assert inspector._scene_geometry_fields["x"] is not first_editor
+    inspector.clear_scene_element()
+    qapp.processEvents()
+    assert isValid(geometry_box)
+    geometry_box.hide()
+    geometry_box.show()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_look_region_context_authors_interaction_event_actions_and_safe_rename(qapp, tmp_path: Path) -> None:
+    story_root, shared_root = write_fixture_story(tmp_path)
+    (story_root / "scenes" / "intro.yaml").write_text(
+        "id: intro\n"
+        "exploration:\n"
+        "  look_regions:\n"
+        "    - id: desk\n"
+        "      rect: [1, 2, 30, 20]\n"
+        "      interaction: inspect\n"
+        "      event: examine_desk\n"
+        "      mystery_field: preserve-me\n"
+        "  look_events:\n"
+        "    examine_desk:\n"
+        "      actions:\n"
+        "        - type: dialog\n"
+        "          dialog: desk_sequence\n"
+        "  dialogue_sequences:\n"
+        "    desk_sequence: Desk.\n",
+        encoding="utf-8",
+    )
+    session = ProjectSession.from_path(story_root, shared_root)
+    selection = _selection(session, ContentKind.SCENE, "intro")
+    session.select(selection)
+    inspector = InspectorWidget(session)
+    inspector.set_selection(session.project, selection, session.definition(), session.diagnostics)
+    from story_designer.models import SceneElementSelection
+    ref = SceneElementSelection("intro", "look_region", "desk")
+    inspector.set_scene_element(ref, session.working_mapping(selection)["exploration"]["look_regions"][0])
+
+    assert inspector.look_region_identity.text() == "desk"
+    assert inspector.look_region_interaction_combo.currentData() == "inspect"
+    assert inspector.look_region_event_combo.currentData() == "examine_desk"
+    assert inspector.look_region_actions.count() == 1
+    assert not inspector.look_region_unknown_box.isHidden()
+
+    inspector.look_region_interaction_combo.setCurrentIndex(inspector.look_region_interaction_combo.findData("action"))
+    assert session.working_mapping(selection)["exploration"]["look_regions"][0]["interaction"] == "action"
+
+    inspector.look_region_action_type.setCurrentIndex(inspector.look_region_action_type.findData("set_flag"))
+    inspector.look_region_add_action.click()
+    flag_editor = inspector._look_region_action_fields["flag"]
+    assert isinstance(flag_editor, QLineEdit)
+    flag_editor.setText("opened")
+    flag_editor.editingFinished.emit()
+    actions = session.working_mapping(selection)["exploration"]["look_events"]["examine_desk"]["actions"]
+    assert actions[-1]["type"] == "set_flag"
+    assert actions[-1]["flag"] == "opened"
+    assert session.working_mapping(selection)["exploration"]["look_regions"][0]["mystery_field"] == "preserve-me"
+
+    from story_designer.models import RenameSceneElementCommand
+    session.apply_command(RenameSceneElementCommand(selection, ref, "desk_new"))
+    assert session.working_mapping(selection)["exploration"]["look_regions"][0]["id"] == "desk_new"
+    session.undo()
+    assert session.working_mapping(selection)["exploration"]["look_regions"][0]["id"] == "desk"
+    session.redo()
+    assert session.working_mapping(selection)["exploration"]["look_regions"][0]["id"] == "desk_new"
+    assert session.save_all()
+    reloaded = ProjectSession.from_path(story_root, shared_root)
+    reloaded_selection = _selection(reloaded, ContentKind.SCENE, "intro")
+    reloaded_region = reloaded.working_mapping(reloaded_selection)["exploration"]["look_regions"][0]
+    assert reloaded_region["id"] == "desk_new"
+    assert reloaded_region["interaction"] == "action"
+    assert reloaded.working_mapping(reloaded_selection)["exploration"]["look_events"]["examine_desk"]["actions"][-1]["flag"] == "opened"

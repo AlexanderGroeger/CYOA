@@ -4,21 +4,24 @@ A data-driven, fullscreen `pygame-ce` choose-your-own-adventure engine.
 Stories remain YAML-driven; rendering and player input are handled entirely
 inside a pygame window.
 
-## Run
+## Run a game story
 
 ```bash
 pip install -r requirements.txt
 python main.py --story stories/demo_story
 ```
 
-The read-only Story Designer can be launched independently of pygame with:
+## Launch Story Designer
 
 ```bash
 python -m story_designer
 ```
 
-It opens and validates Story/Core projects for browsing; editing and saving
-are intentionally deferred to the next editor phase.
+The Designer is a standalone authoring application; it does not require a
+story argument or initialize the pygame runtime. From its welcome screen use
+`File → New Story...` to create a valid blank project, or `File → Open Story...`
+to edit an existing one. The game runtime remains the separate `main.py`
+entry point shown above.
 
 ## Mechanics lab
 

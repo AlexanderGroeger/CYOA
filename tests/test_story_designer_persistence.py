@@ -10,7 +10,7 @@ import yaml
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from engine.story_core import ContentKind
+from engine.story_core import ContentKind, NewStorySpec, create_story_project
 from story_core_fixture import write_fixture_story
 from story_designer.models import (
     DefinitionSelection,
@@ -23,10 +23,12 @@ from story_designer.models import (
 
 try:
     from PySide6.QtWidgets import QApplication, QMessageBox
+    from shiboken6 import isValid
     from story_designer.main_window import MainWindow
 except ImportError:  # pragma: no cover - Core-only environments
     QApplication = None  # type: ignore[assignment]
     QMessageBox = None  # type: ignore[assignment]
+    isValid = None  # type: ignore[assignment]
     MainWindow = None  # type: ignore[assignment]
 
 
@@ -168,6 +170,41 @@ def test_main_window_actions_and_inspector_refresh_follow_history(qapp, tmp_path
     )
     assert window._confirm_unsaved_changes("close this story")
     window.close()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_new_open_reload_close_story_lifecycle_keeps_inspector_widgets_alive(qapp, tmp_path: Path) -> None:
+    first_root = create_story_project(
+        NewStorySpec("First Story", "first_story", tmp_path),
+        shared_assets_root=tmp_path / "shared_assets",
+    )
+    second_root = create_story_project(
+        NewStorySpec("Second Story", "second_story", tmp_path),
+        shared_assets_root=tmp_path / "shared_assets",
+    )
+    window = MainWindow()
+    geometry_box = window.inspector.scene_geometry_box
+    try:
+        assert window.open_story_path(first_root)
+        start = _selection(window.session, ContentKind.SCENE, "start")
+        window.session.select(start)
+        window._refresh_views()
+        assert isValid(geometry_box)
+
+        assert window.reload_story()
+        assert isValid(geometry_box)
+        assert window.close_story()
+        assert isValid(geometry_box)
+
+        assert window.open_story_path(second_root)
+        start = _selection(window.session, ContentKind.SCENE, "start")
+        window.session.select(start)
+        window._refresh_views()
+        assert isValid(geometry_box)
+        geometry_box.hide()
+        geometry_box.show()
+    finally:
+        window.close()
 
 
 @pytest.fixture(scope="module")

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from engine.core.condition_eval import evaluate_condition as evaluate_legacy
-from engine.story_core import ContentKind
+from engine.story_core import ContentKind, ProjectSymbols
 from engine.story_core.conditions import evaluate_structured_condition, parse_condition
 from engine.story_core.schema import MISSING
 from story_core_fixture import write_fixture_story
@@ -17,6 +17,7 @@ from story_designer.models import (
     ProjectSession,
     SetNavigationConditionCommand,
     SetSceneElementConditionCommand,
+    condition_symbol_candidates,
 )
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -92,6 +93,45 @@ def test_condition_model_preserves_unknown_structure_and_aliases() -> None:
     alias = ConditionTreeModel.from_value({"var": "trust", "exists": True})
     assert alias.supported
     assert alias.value() == {"var": "trust", "exists": True}
+
+
+@pytest.mark.parametrize("known", [False, True])
+def test_condition_model_can_add_every_structured_kind_without_stale_project_symbol_api(known: bool) -> None:
+    symbols = ProjectSymbols(
+        declared_flags=frozenset({"opened"}) if known else frozenset(),
+        declared_variables=frozenset({"trust"}) if known else frozenset(),
+        referenced_flags=frozenset({"seen"}) if known else frozenset(),
+        referenced_variables=frozenset({"count"}) if known else frozenset(),
+        referenced_items=frozenset({"key"}) if known else frozenset(),
+    )
+    assert condition_symbol_candidates(symbols, "flag") == (("opened", "seen") if known else ())
+    assert condition_symbol_candidates(symbols, "variable") == (("count", "trust") if known else ())
+    assert condition_symbol_candidates(symbols, "var") == (("count", "trust") if known else ())
+    assert condition_symbol_candidates(symbols, "has_item") == (("key",) if known else ())
+
+    model = ConditionTreeModel.new("all", symbols)
+    for kind in ("flag", "variable", "var", "has_item", "equals", "not_equals", "exists", "quantity"):
+        if kind in {"equals", "not_equals", "exists", "quantity"}:
+            # These are leaf parameters, not node kinds in the shared vocabulary.
+            continue
+        model.add_child((), kind)
+    model.add_child((), "not")
+    model.change_type((0,), "any")
+    model.add_child((0,), "flag")
+    model.add_child((0,), "has_item")
+    model.validate()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_blank_project_condition_widget_reports_no_callback_exception_for_supported_kinds(qapp, tmp_path: Path) -> None:
+    session, _selection_value = _session(tmp_path, "id: intro\n")
+    widget = ConditionEditorWidget(project=session.project)
+    widget.set_condition({"all": []}, project=session.project)
+    assert widget.model is not None
+    for kind in ("flag", "variable", "var", "has_item"):
+        widget._apply_model_operation(widget.model.add_child, (), kind, None)
+    assert widget.condition_status.text() == ""
+    assert widget.model.value()["all"][-1]["has_item"] == "item_id"
 
 
 def test_condition_widget_distinguishes_absence_and_adds_structured_value(qapp) -> None:

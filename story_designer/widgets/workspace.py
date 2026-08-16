@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QLabel, QPlainTextEdit, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget
 
 from engine.story_core import ContentKind, Diagnostics, StoryProject
 
@@ -31,6 +31,8 @@ class WorkspaceWidget(QWidget):
     battle_changed = Signal(object)
     combat_move_section_selected = Signal(object)
     combat_move_changed = Signal(object)
+    new_story_requested = Signal()
+    open_story_requested = Signal()
 
     def __init__(self, session: ProjectSession | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -40,9 +42,18 @@ class WorkspaceWidget(QWidget):
         self.overview_title.setStyleSheet("font-size: 18px; font-weight: bold;")
         self.overview = QPlainTextEdit()
         self.overview.setReadOnly(True)
+        self.welcome_new_button = QPushButton("New Story")
+        self.welcome_open_button = QPushButton("Open Story")
+        self.welcome_new_button.clicked.connect(self.new_story_requested)
+        self.welcome_open_button.clicked.connect(self.open_story_requested)
+        welcome_buttons = QHBoxLayout()
+        welcome_buttons.addWidget(self.welcome_new_button)
+        welcome_buttons.addWidget(self.welcome_open_button)
+        welcome_buttons.addStretch(1)
         page = QWidget()
         page_layout = QVBoxLayout(page)
         page_layout.addWidget(self.overview_title)
+        page_layout.addLayout(welcome_buttons)
         page_layout.addWidget(self.overview)
         self.tabs.addTab(page, "Overview")
         self.scene_editor = SceneEditorWidget(session)
@@ -74,6 +85,8 @@ class WorkspaceWidget(QWidget):
     def clear(self) -> None:
         self.overview_title.setText("Welcome to Story Designer")
         self.overview.setPlainText("Open a story project to browse its authored content.")
+        self.welcome_new_button.setVisible(True)
+        self.welcome_open_button.setVisible(True)
         self.tabs.setCurrentIndex(0)
         self.scene_editor.clear()
         self.dialogue_editor.clear()
@@ -91,6 +104,8 @@ class WorkspaceWidget(QWidget):
         if project is None:
             self.clear()
             return
+        self.welcome_new_button.setVisible(False)
+        self.welcome_open_button.setVisible(False)
         self.scene_graph.set_state(project, selection, definition, diagnostics)
         self.battle_editor.set_state(project, selection, definition, diagnostics)
         self.combat_move_editor.set_state(project, selection, definition, diagnostics)
@@ -124,7 +139,7 @@ class WorkspaceWidget(QWidget):
         self.overview.setPlainText(
             f"Source: {getattr(definition, 'source', selection.source)}\n\n"
             f"Authored fields: {len(authored) if hasattr(authored, '__len__') else 'n/a'}\n\n"
-            "Edit supported properties in the Inspector. Changes are kept in memory until persistence is added."
+            "Edit supported properties in the Inspector. Changes remain in memory until you save the story."
         )
 
     def open_dialogue_sequence(self, sequence_id: str) -> None:

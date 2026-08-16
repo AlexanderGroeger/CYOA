@@ -7,7 +7,7 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QBrush, QColor, QFont, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QGraphicsItem,
@@ -48,6 +48,8 @@ class SceneCanvasView(QGraphicsView):
     """Graphics view that reports logical cursor coordinates."""
 
     cursor_moved = Signal(object)
+    drag_position_changed = Signal(object)
+    mouse_released = Signal(object)
     cancel_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -58,10 +60,51 @@ class SceneCanvasView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setBackgroundBrush(QColor("#252733"))
+        self._drag_mode_before_resize: QGraphicsView.DragMode | None = None
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API name
+        # ScrollHandDrag can begin a viewport grab before the graphics child
+        # receives the press.  Suppress it for editor handles so the handle's
+        # release cannot be turned into a canvas pan when its rect previews.
+        scene_pos = self.mapToScene(event.position().toPoint())
+        if self._resize_handle_at(scene_pos):
+            self._drag_mode_before_resize = self.dragMode()
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        super().mousePressEvent(event)
+
+    def viewportEvent(self, event) -> bool:  # noqa: N802 - Qt API name
+        if event.type() == QEvent.Type.MouseButtonPress:
+            position = event.position().toPoint()
+            scene_pos = self.mapToScene(position)
+            if self._resize_handle_at(scene_pos):
+                self._drag_mode_before_resize = self.dragMode()
+                self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        return super().viewportEvent(event)
+
+    def _resize_handle_at(self, scene_pos: QPointF) -> bool:
+        if self.scene() is None:
+            return False
+        # The scene boundary is intentionally above editor affordances and
+        # ignores mouse buttons, but it still wins a plain itemAt() query.
+        return any(hasattr(item, "_gesture_started") for item in self.scene().items(scene_pos))
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API name
-        self.cursor_moved.emit(self.mapToScene(event.position().toPoint()))
+        point = self.mapToScene(event.position().toPoint())
+        self.cursor_moved.emit(point)
         super().mouseMoveEvent(event)
+        self.drag_position_changed.emit(point)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API name
+        point = self.mapToScene(event.position().toPoint())
+        super().mouseReleaseEvent(event)
+        self.mouse_released.emit(point)
+        self.restore_drag_mode()
+
+    def restore_drag_mode(self) -> None:
+        mode = self._drag_mode_before_resize
+        self._drag_mode_before_resize = None
+        if mode is not None:
+            self.setDragMode(mode)
 
     def leaveEvent(self, event) -> None:  # noqa: N802 - Qt API name
         self.cursor_moved.emit(None)
@@ -125,45 +168,49 @@ class SceneGraphicsItem(QGraphicsRectItem):
         return value
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        bounds = self.rect()
-        if self.region:
-            painter.fillRect(bounds, QColor(70, 180, 220, 45))
-            pen = QPen(QColor("#56c7e8"), 2)
-            pen.setStyle(Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            painter.drawRect(bounds)
-        elif self.pixmap is not None and not self.pixmap.isNull():
-            painter.drawPixmap(bounds, self.pixmap)
-        elif self.text_art:
-            painter.fillRect(bounds, QColor(40, 45, 65, 230))
-            painter.setPen(QColor("#e8e9f0"))
-            painter.setFont(QFont("monospace", 7))
-            painter.drawText(bounds.adjusted(3, 3, -3, -3), Qt.AlignmentFlag.AlignCenter, self.text_art)
-        else:
-            painter.fillRect(bounds, QColor(190, 70, 70, 120) if self.missing else QColor(110, 110, 125, 110))
-            pen = QPen(QColor("#ff8b8b") if self.missing else QColor("#c3c4cf"), 1)
-            pen.setStyle(Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            painter.drawRect(bounds)
-            painter.setFont(QFont("sans-serif", 7))
-            painter.drawText(bounds.adjusted(3, 3, -3, -3), Qt.AlignmentFlag.AlignCenter,
-                             self.missing or self.label or "unsupported")
+        painter.save()
+        try:
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            bounds = self.rect()
+            if self.region:
+                painter.fillRect(bounds, QColor(70, 180, 220, 45))
+                pen = QPen(QColor("#56c7e8"), 2)
+                pen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(pen)
+                painter.drawRect(bounds)
+            elif self.pixmap is not None and not self.pixmap.isNull():
+                painter.drawPixmap(bounds, self.pixmap, QRectF(self.pixmap.rect()))
+            elif self.text_art:
+                painter.fillRect(bounds, QColor(40, 45, 65, 230))
+                painter.setPen(QColor("#e8e9f0"))
+                painter.setFont(QFont("monospace", 7))
+                painter.drawText(bounds.adjusted(3, 3, -3, -3), Qt.AlignmentFlag.AlignCenter, self.text_art)
+            else:
+                painter.fillRect(bounds, QColor(190, 70, 70, 120) if self.missing else QColor(110, 110, 125, 110))
+                pen = QPen(QColor("#ff8b8b") if self.missing else QColor("#c3c4cf"), 1)
+                pen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(pen)
+                painter.drawRect(bounds)
+                painter.setFont(QFont("sans-serif", 7))
+                painter.drawText(bounds.adjusted(3, 3, -3, -3), Qt.AlignmentFlag.AlignCenter,
+                                 self.missing or self.label or "unsupported")
 
-        if self.label and self.region:
-            painter.setPen(QPen(QColor("#f5f6fa"), 1))
-            painter.setBrush(QBrush(QColor(20, 25, 40, 190)))
-            painter.setFont(QFont("sans-serif", 8, QFont.Weight.Bold))
-            label_rect = bounds.adjusted(2, 2, -2, -max(2, bounds.height() - 16))
-            painter.drawRect(label_rect)
-            painter.drawText(label_rect.adjusted(3, 0, -3, 0), Qt.AlignmentFlag.AlignVCenter, self.label)
+            if self.label and self.region:
+                painter.setPen(QPen(QColor("#f5f6fa"), 1))
+                painter.setBrush(QBrush(QColor(20, 25, 40, 190)))
+                painter.setFont(QFont("sans-serif", 8, QFont.Weight.Bold))
+                label_rect = bounds.adjusted(2, 2, -2, -max(2, bounds.height() - 16))
+                painter.drawRect(label_rect)
+                painter.drawText(label_rect.adjusted(3, 0, -3, 0), Qt.AlignmentFlag.AlignVCenter, self.label)
 
-        if option.state & QStyle.StateFlag.State_Selected:
-            selection_pen = QPen(QColor("#ffd166"), 3)
-            selection_pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
-            painter.setPen(selection_pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(bounds)
+            if option.state & QStyle.StateFlag.State_Selected:
+                selection_pen = QPen(QColor("#ffd166"), 3)
+                selection_pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+                painter.setPen(selection_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(bounds)
+        finally:
+            painter.restore()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API name
         if self.editable and self.ref is not None:
@@ -202,6 +249,7 @@ class ResizeHandleItem(QGraphicsRectItem):
         self._gesture_finished = gesture_finished
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         self.setCursor(_resize_cursor(corner))
         self.setZValue(1000)
 
@@ -221,7 +269,11 @@ class ResizeHandleItem(QGraphicsRectItem):
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API name
-        self._gesture_finished(self.owner, self.corner, event.scenePos())
+        # The view owns the release boundary.  A handle can move away from
+        # the pointer during preview, so committing here is unreliable when
+        # Qt routes the release through the graphics scene with a refreshed
+        # scene position.  SceneCanvasView.mouse_released supplies the stable
+        # viewport position to the same finish callback.
         event.accept()
 
 
@@ -245,13 +297,16 @@ class SceneEditorWidget(QWidget):
         self.look_region_items: dict[str, SceneGraphicsItem] = {}
         self.resize_handles: dict[str, ResizeHandleItem] = {}
         self._resize_gesture: tuple[SceneGraphicsItem, str, tuple[float, float, float, float]] | None = None
+        self._resize_view_drag_mode: QGraphicsView.DragMode | None = None
         self.scene = QGraphicsScene(self)
         self.navigation_panel = NavigationPanel(session, self)
         self.navigation_panel.navigation_changed.connect(self.navigation_changed)
         self.navigation_panel.open_destination_scene.connect(self.open_destination_scene)
-        self.view = SceneCanvasView()
+        self.view = SceneCanvasView(self)
         self.view.setScene(self.scene)
         self.view.cursor_moved.connect(self._update_cursor)
+        self.view.drag_position_changed.connect(self._preview_active_resize)
+        self.view.mouse_released.connect(self._finish_active_resize)
         self.view.cancel_requested.connect(self.cancel_gesture)
         self.scene.selectionChanged.connect(self._selection_changed)
 
@@ -699,7 +754,14 @@ class SceneEditorWidget(QWidget):
         if target is None or target.shape != "rect":
             return
         x, y, width, height = target.value
-        self.select_element(owner.ref, emit=False)
+        # Handles are only visible for the selected region.  Avoid clearing
+        # and rebuilding selection while Qt is dispatching the press event;
+        # that used to make the active child item lose its gesture in some
+        # view/style combinations.
+        if self.selected_element != owner.ref:
+            self.select_element(owner.ref, emit=False)
+        self._resize_view_drag_mode = self.view.dragMode()
+        self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
         self._resize_gesture = (owner, corner, (float(x), float(y), float(width), float(height)))
 
     def _preview_resize(self, owner: SceneGraphicsItem, corner: str, scene_pos: QPointF) -> None:
@@ -709,9 +771,13 @@ class SceneEditorWidget(QWidget):
         x, y, width, height = _resized_rect(gesture[2], corner, scene_pos.x(), scene_pos.y())
         owner.setPos(x, y)
         owner.setRect(0, 0, width, height)
-        handle = self.resize_handles.get(corner)
-        if handle is not None:
-            self._position_handle(owner, handle, corner)
+        # Keep every affordance attached to the preview rectangle.  Updating
+        # only the active handle leaves the opposite corners at stale scene
+        # coordinates during a live drag.
+        for handle_corner, handle in self.resize_handles.items():
+            if handle.owner is owner:
+                self._position_handle(owner, handle, handle_corner)
+        owner.update()
 
     def _finish_resize(self, owner: SceneGraphicsItem, corner: str, scene_pos: QPointF) -> None:
         gesture = self._resize_gesture
@@ -719,6 +785,7 @@ class SceneEditorWidget(QWidget):
             return
         self._preview_resize(owner, corner, scene_pos)
         self._resize_gesture = None
+        self._restore_resize_view_mode()
         x, y = owner.scenePos().x(), owner.scenePos().y()
         geometry = (
             _logical_int(x),
@@ -728,6 +795,26 @@ class SceneEditorWidget(QWidget):
         )
         if not self.commit_geometry(owner.ref, geometry):
             self._restore_rect(owner, gesture[2])
+
+    def _preview_active_resize(self, scene_pos: QPointF) -> None:
+        """Keep the gesture alive even if a moving handle loses child grab."""
+
+        gesture = self._resize_gesture
+        if gesture is not None:
+            self._preview_resize(gesture[0], gesture[1], scene_pos)
+
+    def _finish_active_resize(self, scene_pos: QPointF) -> None:
+        """Commit a handle gesture at the canvas boundary on mouse release."""
+
+        gesture = self._resize_gesture
+        if gesture is not None:
+            self._finish_resize(gesture[0], gesture[1], scene_pos)
+
+    def _restore_resize_view_mode(self) -> None:
+        mode = self._resize_view_drag_mode
+        self._resize_view_drag_mode = None
+        if mode is not None:
+            self.view.setDragMode(mode)
 
     def _finish_item_drag(self, item: SceneGraphicsItem, start: QPointF, _end: QPointF) -> None:
         if item.ref is None:
@@ -825,6 +912,8 @@ class SceneEditorWidget(QWidget):
         self._resize_gesture = None
         if gesture is not None:
             self._restore_rect(gesture[0], gesture[2])
+            self._restore_resize_view_mode()
+        self.view.restore_drag_mode()
         for item in [*self.object_items.values(), *self.look_region_items.values()]:
             start = getattr(item, "_gesture_start_pos", None)
             if start is not None:

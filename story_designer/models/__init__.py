@@ -53,6 +53,7 @@ from .condition_editor import (
     NODE_TYPES,
     PARAMETER_TYPES,
     condition_mode,
+    condition_symbol_candidates,
     validate_condition_value,
 )
 from .editing import (
@@ -70,6 +71,8 @@ from .editing import (
     SetNavigationConditionCommand,
     SetSceneElementConditionCommand,
     SetSceneElementPropertyCommand,
+    RenameSceneElementCommand,
+    CreateLookEventCommand,
     SetDialogueTextCommand,
     SetDialogueConditionCommand,
     SetDialogueMetadataCommand,
@@ -154,6 +157,8 @@ __all__ = [
     "SetNavigationConditionCommand",
     "SetSceneElementConditionCommand",
     "SetSceneElementPropertyCommand",
+    "RenameSceneElementCommand",
+    "CreateLookEventCommand",
     "SetDialogueTextCommand",
     "SetDialogueConditionCommand",
     "SetDialogueMetadataCommand",
@@ -252,5 +257,6 @@ __all__ = [
     "NODE_TYPES",
     "PARAMETER_TYPES",
     "condition_mode",
+    "condition_symbol_candidates",
     "validate_condition_value",
 ]

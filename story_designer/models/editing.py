@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
+import re
 from typing import Any
 
 from engine.story_core import (
@@ -1396,6 +1397,114 @@ class SetSceneElementPropertyCommand(EditCommand):
             target[self.key] = _copy(self.value)
 
 
+class RenameSceneElementCommand(EditCommand):
+    """Rename one local object/look-region ID as one undoable edit."""
+
+    operation = "rename_scene_element"
+
+    def __init__(self, selection: DefinitionSelection, element: Any, new_id: str) -> None:
+        super().__init__(selection, ())
+        self.element = element
+        self.old_id = str(getattr(element, "id", ""))
+        self.new_id = str(new_id).strip()
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        kind = getattr(self.element, "kind", None)
+        if kind not in {"object", "look_region"}:
+            return ValidationResult.error("Only scene objects and Look Regions can be renamed.")
+        if not self.old_id:
+            return ValidationResult.error("The selected scene element has no ID.")
+        if not self.new_id:
+            return ValidationResult.error("A Look Region ID cannot be empty.")
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", self.new_id):
+            return ValidationResult.error("ID must start with a letter and contain only letters, numbers, '_' or '-'.")
+        found = _scene_element_condition_location(model.mapping, self.element)
+        if found is None:
+            return ValidationResult.error("The selected scene element no longer exists.")
+        if self.new_id != self.old_id and self.new_id in _scene_element_ids(model.mapping):
+            return ValidationResult.error(f"Scene element id {self.new_id!r} is already in use.")
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        found = _scene_element_condition_location(working_copy.mapping, self.element)
+        if found is None:
+            raise KeyError("The selected scene element no longer exists")
+        _path, target = found
+        if not isinstance(target, dict):
+            raise TypeError("Scene elements must be mappings")
+        target["id"] = self.new_id
+
+
+class CreateLookEventCommand(EditCommand):
+    """Create a local look-event payload and attach it to one target."""
+
+    operation = "create_look_event"
+
+    def __init__(self, selection: DefinitionSelection, element: Any, event_id: str) -> None:
+        super().__init__(selection, ())
+        self.element = element
+        self.event_id = str(event_id).strip()
+
+    def validate(self, model: PropertyModel) -> ValidationResult:
+        if getattr(self.element, "kind", None) != "look_region":
+            return ValidationResult.error("Only Look Regions can create a Look Event.")
+        if not self.event_id:
+            return ValidationResult.error("A Look Event ID cannot be empty.")
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", self.event_id):
+            return ValidationResult.error("Event ID must start with a letter and contain only letters, numbers, '_' or '-'.")
+        if _scene_element_condition_location(model.mapping, self.element) is None:
+            return ValidationResult.error("The selected Look Region no longer exists.")
+        events = _look_events_mapping(model.mapping)
+        if self.event_id in events:
+            return ValidationResult.error(f"Look Event {self.event_id!r} already exists.")
+        return ValidationResult.ok()
+
+    def apply(self, working_copy: DefinitionWorkingCopy) -> None:
+        self._old_mapping = working_copy.to_mapping()
+        found = _scene_element_condition_location(working_copy.mapping, self.element)
+        if found is None:
+            raise KeyError("The selected Look Region no longer exists")
+        _path, target = found
+        if not isinstance(target, dict):
+            raise TypeError("Look Regions must be mappings")
+        events = _ensure_look_events_mapping(working_copy.mapping)
+        if self.event_id in events:
+            raise ValueError(f"Look Event {self.event_id!r} already exists")
+        events[self.event_id] = {"actions": []}
+        target["event"] = self.event_id
+
+
+def _look_events_mapping(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
+    exploration = mapping.get("exploration")
+    if isinstance(exploration, Mapping) and isinstance(exploration.get("look_events"), Mapping):
+        return exploration["look_events"]
+    events = mapping.get("look_events")
+    return events if isinstance(events, Mapping) else {}
+
+
+def _ensure_look_events_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
+    exploration = mapping.get("exploration")
+    if isinstance(exploration, dict):
+        events = exploration.get("look_events")
+        if events is None:
+            exploration["look_events"] = {}
+            events = exploration["look_events"]
+        if isinstance(events, dict):
+            return events
+        raise TypeError("exploration.look_events must be a mapping")
+    if exploration is True or exploration is None:
+        mapping["exploration"] = {"look_events": {}}
+        return mapping["exploration"]["look_events"]
+    events = mapping.get("look_events")
+    if events is None:
+        mapping["look_events"] = {}
+        events = mapping["look_events"]
+    if isinstance(events, dict):
+        return events
+    raise TypeError("look_events must be a mapping")
+
+
 class SetDialogueTextCommand(EditCommand):
     """Commit one completed dialogue text editing session."""
 
@@ -2327,6 +2436,8 @@ __all__ = [
     "InsertSceneElementCommand",
     "RemoveSceneElementCommand",
     "DuplicateSceneElementCommand",
+    "RenameSceneElementCommand",
+    "CreateLookEventCommand",
     "InsertNavigationEntryCommand",
     "RemoveNavigationEntryCommand",
     "SetNavigationDestinationCommand",
