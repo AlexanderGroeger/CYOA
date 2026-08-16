@@ -23,11 +23,14 @@ from .actions import (
     parse_actions,
 )
 from .compat import (
+    DEFAULT_OBJECT_SIZE,
+    has_legacy_object_interactions,
     LegacyProjectView,
     SaveCompatibilityAdapter,
     SaveReferenceValidator,
     validate_save_references,
     validate_v1_save_references,
+    migrate_legacy_object_interactions,
 )
 from .conditions import (
     ConditionDialect,
@@ -154,6 +157,9 @@ __all__ = [
     "ItemDefinition",
     "ItemReference",
     "LegacyProjectView",
+    "DEFAULT_OBJECT_SIZE",
+    "has_legacy_object_interactions",
+    "migrate_legacy_object_interactions",
     "load_story_project",
     "NewStorySpec",
     "MoveDefinition",

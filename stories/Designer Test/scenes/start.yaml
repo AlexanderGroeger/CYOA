@@ -6,8 +6,8 @@ exploration:
   look_regions:
   - id: test_region
     rect:
-    - 206
-    - 210
+    - 224
+    - 150
     - 171
     - 129
     interaction: inspect
@@ -19,6 +19,8 @@ exploration:
         file: heal.wav
       - type: dialog
         text: You got 40 HP!
+      - type: scene_transition
+        scene: dev_room
   dialogue_sequences:
     dialogue:
       text: ''

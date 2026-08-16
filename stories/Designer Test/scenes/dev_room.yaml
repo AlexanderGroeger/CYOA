@@ -1,2 +1,7 @@
 id: dev_room
-text: ''
+text: Hello!
+background: repeating_cubes.png
+music: rude_buster.ogg
+exploration:
+  navigation:
+  - scene: dev_room

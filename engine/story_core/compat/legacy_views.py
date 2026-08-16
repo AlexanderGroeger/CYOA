@@ -233,7 +233,11 @@ class LegacyProjectView:
                 raise AssetNotFoundError(
                     f"{relative} declares id '{declared_id}', which doesn't match its filename"
                 )
-        return _mapping_copy(definition)
+        result = _mapping_copy(definition)
+        if label == "scene":
+            from .object_interaction import migrate_legacy_object_interactions
+            result = migrate_legacy_object_interactions(result)
+        return result
 
     def _definition(self, identifier: str, *collection_names: str) -> Any:
         method_names = {

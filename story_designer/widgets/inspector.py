@@ -92,13 +92,14 @@ class InspectorWidget(QWidget):
         self._scene_element = None
         self._rows: dict[tuple[str | int, ...], _PropertyRow] = {}
         self._object_groups: dict[str, QFormLayout] = {}
-        self._scene_geometry_fields: dict[str, QSpinBox] = {}
+        self._scene_geometry_fields: dict[str, QWidget] = {}
         self._scene_asset_fields: dict[str, AssetPathEditor] = {}
         self._look_region_action_fields: dict[str, QWidget] = {}
         self._look_region_event_id: str | None = None
         self._look_region_actions_path: tuple[str | int, ...] | None = None
         self._updating_scene_geometry = False
         self._updating_scene_element = False
+        self._object_name_editing = False
 
         self.header = QLabel("Inspector")
         self.header.setStyleSheet("font-size: 16px; font-weight: bold;")
@@ -142,6 +143,48 @@ class InspectorWidget(QWidget):
         self.scene_condition_editor.condition_changed.connect(self._scene_condition_changed)
         scene_condition_layout.addWidget(self.scene_condition_editor)
         self.scene_condition_box.hide()
+
+        self.object_identity_box = QGroupBox("Identity")
+        object_identity_form = QFormLayout(self.object_identity_box)
+        self.object_identity_id = self._metadata_label()
+        self.object_name_edit = QLineEdit()
+        self.object_name_edit.editingFinished.connect(self._object_name_finished)
+        self.object_rename_button = QPushButton("Rename…")
+        self.object_rename_button.clicked.connect(self._rename_object)
+        object_name_row = QWidget(self.object_identity_box)
+        object_name_layout = QHBoxLayout(object_name_row)
+        object_name_layout.setContentsMargins(0, 0, 0, 0)
+        object_name_layout.addWidget(self.object_name_edit, 1)
+        object_name_layout.addWidget(self.object_rename_button)
+        object_identity_form.addRow("ID", self.object_identity_id)
+        object_identity_form.addRow("Name", object_name_row)
+        self.object_identity_box.hide()
+
+        self.object_geometry_box = QGroupBox("Transform")
+        self.object_geometry_form = QFormLayout(self.object_geometry_box)
+        self.object_geometry_box.hide()
+        self.object_appearance_box = QGroupBox("Appearance")
+        object_appearance_layout = QVBoxLayout(self.object_appearance_box)
+        self.object_visible = QCheckBox("Visible in authored scene")
+        self.object_visible.stateChanged.connect(self._object_visible_changed)
+        object_appearance_layout.addWidget(self.object_visible)
+        self.object_asset_container = QWidget(self.object_appearance_box)
+        self.object_asset_form = QFormLayout(self.object_asset_container)
+        self.object_asset_form.setContentsMargins(0, 0, 0, 0)
+        self._retired_object_asset_controls = QWidget(self.object_appearance_box)
+        self._retired_object_asset_controls.hide()
+        object_appearance_layout.addWidget(self.object_asset_container)
+        self.object_appearance_box.hide()
+        self.object_condition_box = QGroupBox("Visible When")
+        object_condition_layout = QVBoxLayout(self.object_condition_box)
+        self.object_condition_editor = ConditionEditorWidget(parent=self.object_condition_box)
+        self.object_condition_editor.condition_changed.connect(self._object_condition_changed)
+        object_condition_layout.addWidget(self.object_condition_editor)
+        self.object_condition_box.hide()
+        self.object_context_status = QLabel()
+        self.object_context_status.setWordWrap(True)
+        self.object_context_status.setStyleSheet("color: #b45309;")
+        self.object_context_status.hide()
 
         self.look_region_identity_box = QGroupBox("Identity")
         identity_form = QFormLayout(self.look_region_identity_box)
@@ -241,7 +284,18 @@ class InspectorWidget(QWidget):
         look_context_layout.addStretch(1)
         self.context_tabs.addTab(self.scene_context_page, "Scene")
         self.context_tabs.addTab(self.look_region_context_page, "Look Region")
+        self.object_context_page = QWidget()
+        object_context_layout = QVBoxLayout(self.object_context_page)
+        object_context_layout.setContentsMargins(0, 0, 0, 0)
+        object_context_layout.addWidget(self.object_identity_box)
+        object_context_layout.addWidget(self.object_geometry_box)
+        object_context_layout.addWidget(self.object_appearance_box)
+        object_context_layout.addWidget(self.object_condition_box)
+        object_context_layout.addWidget(self.object_context_status)
+        object_context_layout.addStretch(1)
+        self.context_tabs.addTab(self.object_context_page, "Object")
         self._set_look_region_context_visible(False)
+        self._set_object_context_visible(False)
 
         self.summary = QPlainTextEdit()
         self.summary.setReadOnly(True)
@@ -288,10 +342,18 @@ class InspectorWidget(QWidget):
         self.look_region_interaction_box.hide()
         self.look_region_behavior_box.hide()
         self.look_region_unknown_box.hide()
+        self.object_identity_box.hide()
+        self.object_geometry_box.hide()
+        self.object_appearance_box.hide()
+        self.object_condition_box.hide()
+        self.object_context_status.hide()
         self._clear_scene_geometry_form()
+        self._clear_object_geometry_form()
         self._scene_geometry_fields.clear()
+        self._clear_object_asset_form()
         self._scene_asset_fields.clear()
         self._set_look_region_context_visible(False)
+        self._set_object_context_visible(False)
         self._clear_dynamic_property_editors()
 
     def set_selection(
@@ -308,6 +370,7 @@ class InspectorWidget(QWidget):
         self._scene_element = None
         self.property_scroll.setEnabled(True)
         self._set_look_region_context_visible(False)
+        self._set_object_context_visible(False)
         self.context_tabs.setCurrentWidget(self.scene_context_page)
         self.scene_geometry_box.hide()
         self.scene_condition_box.hide()
@@ -315,6 +378,11 @@ class InspectorWidget(QWidget):
         self.look_region_interaction_box.hide()
         self.look_region_behavior_box.hide()
         self.look_region_unknown_box.hide()
+        self.object_identity_box.hide()
+        self.object_geometry_box.hide()
+        self.object_appearance_box.hide()
+        self.object_condition_box.hide()
+        self.object_context_status.hide()
         self._clear_scene_geometry_form()
         if project is None or selection is None or definition is None:
             self.clear()
@@ -346,15 +414,26 @@ class InspectorWidget(QWidget):
         self.property_scroll.setEnabled(True)
         kind = getattr(selection, "kind", "element")
         if kind == "look_region":
+            self._set_object_context_visible(False)
             self._set_look_region_context_visible(True)
             self.context_tabs.setCurrentWidget(self.look_region_context_page)
+        elif kind == "object":
+            self._set_look_region_context_visible(False)
+            self._set_object_context_visible(True)
+            self.context_tabs.setCurrentWidget(self.object_context_page)
         else:
             self._set_look_region_context_visible(False)
+            self._set_object_context_visible(False)
             self.context_tabs.setCurrentWidget(self.scene_context_page)
             self.look_region_identity_box.hide()
             self.look_region_interaction_box.hide()
             self.look_region_behavior_box.hide()
             self.look_region_unknown_box.hide()
+            self.object_identity_box.hide()
+            self.object_geometry_box.hide()
+            self.object_appearance_box.hide()
+            self.object_condition_box.hide()
+            self.object_context_status.hide()
         self._build_scene_geometry(selection, authored)
         self._build_scene_asset(selection, authored)
         display_kind = kind.replace("_", " ").title()
@@ -368,15 +447,18 @@ class InspectorWidget(QWidget):
         self.look_region_identity.setText(identifier if kind == "look_region" else "Selected Look Region")
         if kind == "look_region":
             self._build_look_region_context(authored)
+        elif kind == "object":
+            self._build_object_context(authored)
         if getattr(selection, "kind", "") in {"object", "look_region"}:
             condition = authored.get("visible_when", authored.get("conditions", MISSING))
             self._updating_scene_element = True
             try:
-                self.scene_condition_editor.set_condition(condition, project=self._project)
+                editor = self.object_condition_editor if kind == "object" else self.scene_condition_editor
+                editor.set_condition(condition, project=self._project)
             finally:
                 self._updating_scene_element = False
-            self.scene_condition_editor.setEnabled(True)
-            self.scene_condition_box.show()
+            editor.setEnabled(True)
+            (self.object_condition_box if kind == "object" else self.scene_condition_box).show()
 
     def _scene_condition_changed(self, value: Any) -> None:
         if self._updating_scene_element or self.session is None or self._selection is None or self._scene_element is None:
@@ -565,6 +647,7 @@ class InspectorWidget(QWidget):
             for item in (row.labelItem, row.fieldItem):
                 widget = item.widget() if item is not None else None
                 if widget is not None:
+                    widget.setParent(self._retired_object_asset_controls)
                     widget.deleteLater()
 
     def _look_region_action_row_changed(self, row: int) -> None:
@@ -621,6 +704,15 @@ class InspectorWidget(QWidget):
                 widget.setValue(float(value))
             widget.valueChanged.connect(lambda number, key=field.key, index=row: self._commit_look_region_action_field(index, key, float(number)))
             return widget
+        if field.kind == "point":
+            widget = QLineEdit()
+            point = value if isinstance(value, (list, tuple)) and len(value) == 2 else (0, 0)
+            widget.setText(f"[{point[0]}, {point[1]}]")
+            widget.setToolTip("Enter [x, y].")
+            widget.editingFinished.connect(
+                lambda key=field.key, index=row, line=widget: self._commit_point_action_field(index, key, line.text())
+            )
+            return widget
         if field.kind == "reference":
             widget = QComboBox()
             current = value if isinstance(value, str) else ""
@@ -637,6 +729,19 @@ class InspectorWidget(QWidget):
         widget.setText("" if value is None else str(value))
         widget.editingFinished.connect(lambda key=field.key, index=row, line=widget: self._commit_look_region_action_field(index, key, line.text()))
         return widget
+
+    def _commit_point_action_field(self, row: int, key: str, text: str) -> None:
+        raw = text.strip().strip("[]()")
+        parts = [part.strip() for part in raw.split(",")]
+        if len(parts) != 2:
+            self.look_region_action_status.setText("Position must be entered as [x, y].")
+            return
+        try:
+            value = [int(parts[0]), int(parts[1])]
+        except ValueError:
+            self.look_region_action_status.setText("Position coordinates must be integers.")
+            return
+        self._commit_look_region_action_field(row, key, value)
 
     def _action_reference_candidates(self, target: str | None) -> tuple[str, ...]:
         if target == "scene_object":
@@ -743,6 +848,7 @@ class InspectorWidget(QWidget):
         self._updating_scene_geometry = True
         try:
             self._clear_scene_geometry_form()
+            self._clear_object_geometry_form()
             self._scene_geometry_fields.clear()
             self._build_scene_geometry_fields(selection, authored)
         finally:
@@ -753,14 +859,19 @@ class InspectorWidget(QWidget):
         if kind == "object":
             raw = authored.get("position", (0, 0))
             values = list(raw) if isinstance(raw, (list, tuple)) and len(raw) == 2 else [0, 0]
-            names = ("x", "y")
+            names = ["x", "y"]
+            if isinstance(authored.get("size"), (list, tuple)) and len(authored["size"]) == 2:
+                values.extend(authored["size"])
+                names.extend(("width", "height"))
+            values.extend((authored.get("rotation", 0), authored.get("z", 0)))
+            names.extend(("rotation", "z"))
         elif kind == "look_region":
             raw = authored.get("rect", authored.get("hitbox"))
             look = authored.get("look")
             if raw is None and isinstance(look, Mapping):
                 raw = look.get("rect", look.get("hitbox"))
             values = list(raw) if isinstance(raw, (list, tuple)) and len(raw) == 4 else [0, 0, 1, 1]
-            names = ("x", "y", "width", "height")
+            names = ["x", "y", "width", "height"]
         else:
             self.scene_geometry_form.addRow(QLabel("This element has no graphical geometry editor."))
             self.scene_geometry_box.show()
@@ -769,18 +880,23 @@ class InspectorWidget(QWidget):
             # Parent at construction time.  These controls are repeatedly
             # rebuilt, and a parentless QWidget can briefly be treated as a
             # native top-level window while Qt reparents it into the form.
-            editor = QSpinBox(self.scene_geometry_box)
+            parent = self.object_geometry_box if kind == "object" else self.scene_geometry_box
+            form = self.object_geometry_form if kind == "object" else self.scene_geometry_form
+            editor = QDoubleSpinBox(parent) if name == "rotation" else QSpinBox(parent)
             editor.setRange(-1_000_000, 1_000_000)
+            if name == "rotation":
+                editor.setDecimals(2)
             if name in {"width", "height"}:
                 editor.setMinimum(1)
             editor.setKeyboardTracking(False)
             editor.setValue(int(values[index]))
-            editor.valueChanged.connect(lambda _value, ref=selection: self._scene_geometry_value_changed(ref))
+            editor.valueChanged.connect(lambda _value, ref=selection, changed=name: self._scene_geometry_value_changed(ref, changed))
             self._scene_geometry_fields[name] = editor
-            self.scene_geometry_form.addRow(name.title(), editor)
-        self.scene_geometry_box.show()
+            form.addRow(name.title(), editor)
+        (self.object_geometry_box if kind == "object" else self.scene_geometry_box).show()
 
     def _build_scene_asset(self, selection: object, authored: Mapping[str, Any]) -> None:
+        self._clear_object_asset_form()
         self._scene_asset_fields.clear()
         if getattr(selection, "kind", "") != "object":
             return
@@ -790,13 +906,13 @@ class InspectorWidget(QWidget):
             project=self._project,
             asset_kind="sprites",
             asset_label="Sprite",
-            parent=self.scene_geometry_box,
+            parent=self.object_asset_container,
         )
         editor.setText(str(authored.get("sprite", "")))
         editor.value_edited.connect(lambda value, ref=selection: self._scene_asset_changed(ref, value))
         self._scene_asset_fields["sprite"] = editor
-        self.scene_geometry_form.addRow("Sprite", editor)
-        self.scene_geometry_box.show()
+        self.object_asset_form.addRow("Sprite", editor)
+        self.object_appearance_box.show()
 
     def _scene_asset_changed(self, selection: object, value: Any) -> None:
         if self.session is None or self._selection is None or selection is not self._scene_element:
@@ -816,12 +932,33 @@ class InspectorWidget(QWidget):
         values = tuple(self._scene_geometry_fields[name].value() for name in self._scene_geometry_fields)
         self.scene_geometry_edited.emit(selection, values)
 
-    def _scene_geometry_value_changed(self, selection: object) -> None:
+    def _scene_geometry_value_changed(self, selection: object, changed: str | None = None) -> None:
         """Commit arrow/step changes immediately without per-keystroke edits."""
 
         if self._updating_scene_geometry:
             return
+        if getattr(selection, "kind", "") == "object":
+            self._object_geometry_value_changed(selection, changed)
+            return
         self._emit_scene_geometry(selection)
+
+    def _object_geometry_value_changed(self, selection: object, changed: str | None = None) -> None:
+        if selection is not self._scene_element:
+            return
+        fields = self._scene_geometry_fields
+        x_field, y_field = fields.get("x"), fields.get("y")
+        if x_field is None or y_field is None:
+            return
+        if changed in {"x", "y"}:
+            self.scene_geometry_edited.emit(selection, (int(x_field.value()), int(y_field.value())))
+        elif changed in {"width", "height"}:
+            self._set_scene_element_property(
+                "size", [int(fields["width"].value()), int(fields["height"].value())]
+            )
+        elif changed == "rotation":
+            self._set_scene_element_property("rotation", float(fields["rotation"].value()))
+        elif changed == "z":
+            self._set_scene_element_property("z", int(fields["z"].value()))
 
     def clear_scene_element(self) -> None:
         """Return the Inspector to the selected top-level definition."""
@@ -838,9 +975,17 @@ class InspectorWidget(QWidget):
         self.look_region_interaction_box.hide()
         self.look_region_behavior_box.hide()
         self.look_region_unknown_box.hide()
+        self.object_identity_box.hide()
+        self.object_geometry_box.hide()
+        self.object_appearance_box.hide()
+        self.object_condition_box.hide()
+        self.object_context_status.hide()
         self._clear_scene_geometry_form()
+        self._clear_object_geometry_form()
         self._scene_geometry_fields.clear()
+        self._clear_object_asset_form()
         self._scene_asset_fields.clear()
+        self._set_object_context_visible(False)
         if self._project is None or self._selection is None or self._definition is None:
             self.clear()
             return
@@ -858,6 +1003,81 @@ class InspectorWidget(QWidget):
         self.context_tabs.setTabVisible(1, visible)
         if not visible:
             self.context_tabs.setCurrentWidget(self.scene_context_page)
+
+    def _set_object_context_visible(self, visible: bool) -> None:
+        """Show the dedicated entity page only while a Scene Object is selected."""
+
+        self.context_tabs.setTabVisible(2, visible)
+        if not visible and self.context_tabs.currentWidget() is self.object_context_page:
+            self.context_tabs.setCurrentWidget(self.scene_context_page)
+
+    def _build_object_context(self, authored: Mapping[str, Any]) -> None:
+        identifier = str(getattr(self._scene_element, "id", ""))
+        self.object_identity_id.setText(identifier)
+        self._object_name_editing = True
+        try:
+            self.object_name_edit.setText(str(authored.get("name", "")))
+            self.object_visible.setChecked(bool(authored.get("visible", True)))
+        finally:
+            self._object_name_editing = False
+        self.object_identity_box.show()
+        self.object_geometry_box.show()
+        self.object_appearance_box.show()
+        self.object_rename_button.setEnabled(self.session is not None)
+        self.object_name_edit.setEnabled(self.session is not None)
+
+    def _object_name_finished(self) -> None:
+        if self._object_name_editing or self._scene_element is None or getattr(self._scene_element, "kind", "") != "object":
+            return
+        self._set_scene_element_property("name", self.object_name_edit.text())
+
+    def _object_visible_changed(self, state: int) -> None:
+        if self._object_name_editing or self._scene_element is None or getattr(self._scene_element, "kind", "") != "object":
+            return
+        self._set_scene_element_property("visible", bool(state))
+
+    def _object_condition_changed(self, value: Any) -> None:
+        if self._updating_scene_element or self.session is None or self._selection is None or self._scene_element is None:
+            return
+        try:
+            self.session.apply_command(SetSceneElementConditionCommand(self._selection, self._scene_element, value))
+        except EditValidationError as exc:
+            self.object_condition_editor.status.setText(exc.message)
+            return
+        self.summary.setPlainText(_compact_mapping(self._scene_element_mapping()))
+        self.state_changed.emit()
+
+    def _set_scene_element_property(self, key: str, value: Any) -> None:
+        if self.session is None or self._selection is None or self._scene_element is None:
+            return
+        try:
+            self.session.apply_command(SetSceneElementPropertyCommand(self._selection, self._scene_element, key, value))
+        except EditValidationError as exc:
+            self.object_context_status.setText(exc.message)
+            self.object_context_status.show()
+            return
+        self._refresh_scene_element_context()
+        self.state_changed.emit()
+
+    def _refresh_scene_element_context(self) -> None:
+        mapping = self._scene_element_mapping()
+        if self._scene_element is not None and isinstance(mapping, Mapping):
+            self.set_scene_element(self._scene_element, mapping)
+
+    def _rename_object(self) -> None:
+        if self.session is None or self._selection is None or self._scene_element is None:
+            return
+        current = str(getattr(self._scene_element, "id", ""))
+        new_id, accepted = QInputDialog.getText(self, "Rename Object", "New ID:", QLineEdit.EchoMode.Normal, current)
+        if not accepted or new_id.strip() == current:
+            return
+        try:
+            self.session.apply_command(RenameSceneElementCommand(self._selection, self._scene_element, new_id))
+        except EditValidationError as exc:
+            self.object_context_status.setText(exc.message)
+            self.object_context_status.show()
+            return
+        self.scene_element_renamed.emit(self._scene_element, new_id.strip())
 
     def _build_form(self) -> None:
         self._clear_dynamic_property_editors()
@@ -1136,6 +1356,27 @@ class InspectorWidget(QWidget):
                 widget = item.widget() if item is not None else None
                 if widget is not None:
                     widget.setParent(self._retired_scene_controls)
+                    widget.deleteLater()
+
+    def _clear_object_geometry_form(self) -> None:
+        """Dispose dynamic Object transform controls without touching appearance."""
+
+        while self.object_geometry_form.rowCount():
+            row = self.object_geometry_form.takeRow(0)
+            for item in (row.labelItem, row.fieldItem):
+                widget = item.widget() if item is not None else None
+                if widget is not None:
+                    widget.deleteLater()
+
+    def _clear_object_asset_form(self) -> None:
+        """Dispose the single dynamic Sprite editor in its owned container."""
+
+        while self.object_asset_form.rowCount():
+            row = self.object_asset_form.takeRow(0)
+            for item in (row.labelItem, row.fieldItem):
+                widget = item.widget() if item is not None else None
+                if widget is not None:
+                    widget.setParent(self._retired_object_asset_controls)
                     widget.deleteLater()
 
     def _clear_dynamic_property_editors(self) -> None:

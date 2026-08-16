@@ -468,6 +468,8 @@ class SceneEditorWidget(QWidget):
         elif obj.sprite_path is not None and pixmap is not None:
             missing = None
         label = obj.id
+        if obj.name:
+            label += f"  ({obj.name})"
         if obj.conditional:
             label += "  ◇ conditional"
         if isinstance(obj.authored.get("animation"), str):
@@ -481,6 +483,8 @@ class SceneEditorWidget(QWidget):
             editable=True,
             gesture_finished=self._finish_item_drag,
         )
+        item.setTransformOriginPoint(item.rect().center())
+        item.setRotation(obj.rotation)
         item.setZValue(100 + obj.z)
         self.scene.addItem(item)
         return item

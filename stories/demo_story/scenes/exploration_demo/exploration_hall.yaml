@@ -1,37 +1,36 @@
 id: exploration_hall
 background: forest.png
 music: overworld.mp3
-
-# A deliberately small navigation hub for the isolated exploration sample.
 exploration:
   dialog:
-    - sequence: hall_arrival
-
+  - sequence: hall_arrival
   navigation:
-    - scene: exploration_study
-      label: Study
-    - scene: exploration_archive
-      label: Hidden Archive
-      conditions:
-        all:
-          - flag: archive_route_open
-            equals: true
-
+  - scene: exploration_study
+    label: Study
+  - scene: exploration_archive
+    label: Hidden Archive
+    conditions:
+      all:
+      - flag: archive_route_open
+        equals: true
   look_regions:
-    - id: archive_door
-      rect: [430, 62, 110, 194]
-      interaction: inspect
-      event: inspect_archive_door
-      priority: 1
-
+  - id: archive_door
+    rect:
+    - 453
+    - 63
+    - 110
+    - 194
+    interaction: inspect
+    event: inspect_archive_door
+    priority: 1
   look_events:
     inspect_archive_door:
       actions:
-        - type: dialog
-          dialog: archive_door_note
-
+      - type: dialog
+        dialog: archive_door_note
   dialogue_sequences:
     hall_arrival:
-      - "The hall joins the study to a sealed archive door. Fresh air drifts in from the study."
+    - The hall joins the study to a sealed archive door. Fresh air drifts in from
+      the study.
     archive_door_note:
-      - "The door has no handle on this side. The lamp in the study may be the key."
+    - The door has no handle on this side. The lamp in the study may be the key.

@@ -261,13 +261,16 @@ class Renderer:
             changed |= before != self._animation_indices.get(name)
         return changed
 
-    def _draw_animation_frame(self, name: str, bounds: Any, surface: Any | None = None) -> None:
+    def _draw_animation_frame(self, name: str, bounds: Any, surface: Any | None = None,
+                              rotation: float = 0.0) -> None:
         path = self._animation_frame(name)
         if path is None:
             return
         if path not in self._images:
             self._images[path] = self.pygame.image.load(str(path)).convert_alpha()
         image = self._fit_image(path, self._images[path], bounds.size)
+        if rotation:
+            image = self.pygame.transform.rotate(image, -float(rotation))
         target = self.surface if surface is None else surface
         target.blit(image, image.get_rect(center=bounds.center))
 
@@ -1253,19 +1256,28 @@ class Renderer:
                 pos = [0, 0]
             x, y = int(pos[0]), int(pos[1])
             size = obj.get("size")
+            rotation = obj.get("rotation", 0)
+            if isinstance(rotation, bool) or not isinstance(rotation, (int, float)):
+                rotation = 0.0
             bounds = pg.Rect(x, y, 1, 1)
             if isinstance(sprite, str) and sprite:
                 path, image = self._image_reference("sprites", sprite)
                 if isinstance(size, (list, tuple)) and len(size) == 2:
                     image = self._scaled_image(path, image, (max(1, int(size[0])), max(1, int(size[1]))))
-                self.surface.blit(image, (x, y))
-                bounds.size = image.get_size()
+                logical_size = image.get_size()
+                if rotation:
+                    image = pg.transform.rotate(image, -float(rotation))
+                    self.surface.blit(image, image.get_rect(center=(x + logical_size[0] / 2, y + logical_size[1] / 2)))
+                    bounds.size = logical_size
+                else:
+                    self.surface.blit(image, (x, y))
+                    bounds.size = image.get_size()
             elif isinstance(size, (list, tuple)) and len(size) == 2:
                 bounds.size = (max(1, int(size[0])), max(1, int(size[1])))
 
             animation = animations.get(object_id, obj.get("animation"))
             if isinstance(animation, str) and animation:
-                self._draw_animation_frame(animation, bounds)
+                self._draw_animation_frame(animation, bounds, rotation=float(rotation))
 
         # The legacy protagonist/character sprite draws after set dressing.
         sprite = scene.get("sprite")

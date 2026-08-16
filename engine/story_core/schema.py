@@ -449,6 +449,44 @@ def default_schema_registry() -> SchemaRegistry:
 
     registry.register(
         Schema(
+            "exploration_object",
+            (
+                _field("id", string(), required=True, description="Stable scene-local object identity."),
+                _field("name", string(), description="Human-readable object name."),
+                _field("position", list_of(integer()), description="Top-left [x, y] position."),
+                _field("size", list_of(integer()), description="Authored [width, height]."),
+                _field("z", integer(), default=0, description="Scene draw order."),
+                _field("rotation", TypeSpec.number(), default=0, description="Rotation in degrees around the object center."),
+                _field("sprite", TypeSpec.asset("sprites"), asset_kind="sprites"),
+                _field("visible", boolean(), default=True),
+                _field("visible_when", TypeSpec.condition(), aliases=("conditions",)),
+                _field("animation", TypeSpec.reference("animation"), reference_target="animation"),
+                _field("animations", mapping(TypeSpec.reference("animation")), reference_target="animation", description="Named global animations available to this object."),
+                _field("look", mapping(), deprecated="Legacy object-owned interaction; prefer Look Regions."),
+                _field("actions", list_of(TypeSpec.object("exploration_action")), deprecated="Legacy object-owned interaction actions."),
+            ),
+            "Visual/runtime entity placed in an exploration scene.",
+        ),
+    )
+    registry.register(
+        Schema(
+            "look_region",
+            (
+                _field("id", string(), required=True, description="Stable scene-local interaction identity."),
+                _field("name", string(), description="Human-readable region name."),
+                _field("rect", list_of(integer()), aliases=("hitbox",), description="Absolute [x, y, width, height] input rectangle."),
+                _field("interaction", TypeSpec.enum(("inspect", "action")), default="inspect"),
+                _field("event", string()),
+                _field("priority", integer(), default=0),
+                _field("z", integer(), default=0),
+                _field("visible", boolean(), default=True),
+                _field("visible_when", TypeSpec.condition(), aliases=("conditions",)),
+            ),
+            "Player input surface; it may overlap any number of Scene Objects.",
+        ),
+    )
+    registry.register(
+        Schema(
             "manifest",
             (
                 _field("id", string(), required=False, description="Stable story identifier."),

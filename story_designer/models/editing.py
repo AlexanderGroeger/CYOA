@@ -1415,7 +1415,7 @@ class RenameSceneElementCommand(EditCommand):
         if not self.old_id:
             return ValidationResult.error("The selected scene element has no ID.")
         if not self.new_id:
-            return ValidationResult.error("A Look Region ID cannot be empty.")
+            return ValidationResult.error("A scene element ID cannot be empty.")
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", self.new_id):
             return ValidationResult.error("ID must start with a letter and contain only letters, numbers, '_' or '-'.")
         found = _scene_element_condition_location(model.mapping, self.element)
@@ -1434,6 +1434,30 @@ class RenameSceneElementCommand(EditCommand):
         if not isinstance(target, dict):
             raise TypeError("Scene elements must be mappings")
         target["id"] = self.new_id
+        if getattr(self.element, "kind", None) == "object":
+            _rewrite_object_references(working_copy.mapping, self.old_id, self.new_id)
+
+
+def _rewrite_object_references(value: Any, old_id: str, new_id: str) -> None:
+    """Rewrite known local action references during an atomic object rename."""
+
+    if isinstance(value, list):
+        for item in value:
+            _rewrite_object_references(item, old_id, new_id)
+        return
+    if not isinstance(value, dict):
+        return
+    for key, item in tuple(value.items()):
+        if key in {"target", "object", "object_id", "target_object"} and item == old_id:
+            value[key] = new_id
+        elif key in {"show_object", "hide_object", "destroy_object", "change_sprite", "change_object_sprite",
+                     "animation", "play_animation", "play_object_animation", "move_object", "rotate_object"}:
+            if item == old_id:
+                value[key] = new_id
+            elif isinstance(item, dict):
+                _rewrite_object_references(item, old_id, new_id)
+        else:
+            _rewrite_object_references(item, old_id, new_id)
 
 
 class CreateLookEventCommand(EditCommand):
@@ -1967,6 +1991,10 @@ class SetDialogueActionParameterCommand(EditCommand):
             return ValidationResult.error(f"Unknown action parameter {self.key!r}.")
         if field.kind in {"string", "multiline", "asset", "reference"} and not isinstance(self.value, str):
             return ValidationResult.error(f"{field.display_name} must be text.")
+        if field.kind == "point":
+            if (not isinstance(self.value, (list, tuple)) or len(self.value) != 2
+                    or any(isinstance(item, bool) or not isinstance(item, int) for item in self.value)):
+                return ValidationResult.error(f"{field.display_name} must contain two integer coordinates.")
         if field.kind == "boolean" and not isinstance(self.value, bool):
             return ValidationResult.error(f"{field.display_name} must be true or false.")
         if field.kind in {"integer", "number"} and (not isinstance(self.value, (int, float)) or isinstance(self.value, bool)):

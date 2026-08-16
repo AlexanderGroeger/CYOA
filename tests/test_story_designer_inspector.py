@@ -320,3 +320,34 @@ def test_look_region_context_authors_interaction_event_actions_and_safe_rename(q
     assert reloaded_region["id"] == "desk_new"
     assert reloaded_region["interaction"] == "action"
     assert reloaded.working_mapping(reloaded_selection)["exploration"]["look_events"]["examine_desk"]["actions"][-1]["flag"] == "opened"
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_object_context_sprite_editor_does_not_duplicate_after_repeated_selection(qapp, tmp_path: Path) -> None:
+    story_root, shared_root = write_fixture_story(tmp_path)
+    (story_root / "scenes" / "intro.yaml").write_text(
+        "id: intro\n"
+        "exploration:\n"
+        "  objects:\n"
+        "    - {id: lamp, position: [1, 2], size: [20, 15], sprite: lamp.png}\n"
+        "    - {id: vase, position: [3, 4], size: [20, 15], sprite: vase.png}\n",
+        encoding="utf-8",
+    )
+    session = ProjectSession.from_path(story_root, shared_root)
+    selection = _selection(session, ContentKind.SCENE, "intro")
+    session.select(selection)
+    inspector = InspectorWidget(session)
+    inspector.set_selection(session.project, selection, session.definition(), session.diagnostics)
+    from story_designer.models import SceneElementSelection
+
+    lamp = SceneElementSelection("intro", "object", "lamp")
+    vase = SceneElementSelection("intro", "object", "vase")
+    for index in range(60):
+        ref = lamp if index % 2 == 0 else vase
+        authored = session.working_mapping(selection)["exploration"]["objects"][index % 2]
+        inspector.set_scene_element(ref, authored)
+        assert inspector.object_asset_form.rowCount() == 1
+        assert len(inspector._scene_asset_fields) == 1
+        inspector.clear_scene_element()
+    qapp.processEvents()
+    assert inspector.object_asset_form.rowCount() == 0

@@ -105,6 +105,29 @@ _EXPLORATION_ACTION_EDITOR_SPECS: tuple[ActionEditorSpec, ...] = (
         ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
         ActionEditorField("animation", "Animation", "reference", "", True, "animation", asset_kind="animation"),
     )),
+    # The explicit object-* names are the canonical vocabulary for new
+    # authoring.  The shorter forms below remain supported for old stories.
+    ActionEditorSpec("move_object", "Move Object", (
+        ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
+        ActionEditorField("position", "Position", "point", [0, 0]),
+        ActionEditorField("duration", "Duration (seconds)", "number", 0.0),
+    )),
+    ActionEditorSpec("rotate_object", "Rotate Object", (
+        ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
+        ActionEditorField("angle", "Angle (degrees)", "number", 0.0),
+        ActionEditorField("duration", "Duration (seconds)", "number", 0.0),
+    )),
+    ActionEditorSpec("change_object_sprite", "Change Object Sprite", (
+        ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
+        ActionEditorField("sprite", "Sprite", "asset", "", asset_kind="sprites"),
+    )),
+    ActionEditorSpec("play_object_animation", "Play Object Animation", (
+        ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
+        ActionEditorField("animation", "Animation", "reference", "", True, "animation", asset_kind="animation"),
+    )),
+    ActionEditorSpec("destroy_object", "Destroy Object", (
+        ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
+    )),
     ActionEditorSpec("show_object", "Show Object", (
         ActionEditorField("target", "Object", "reference", "", True, "scene_object"),
     )),
@@ -391,7 +414,7 @@ def action_references(action: StoryAction | Mapping[str, Any], scope: ActionScop
         add("scene", mapping.get("scene", mapping.get("goto")), "scenes")
     elif kind in {"start_battle", "battle"}:
         add("battle", mapping.get("battle"), "battles")
-    elif kind == "animation":
+    elif kind in {"animation", "play_object_animation"}:
         add("animation", mapping.get("animation"), "animations")
     elif kind in {"set_flag", "clear_flag"}:
         add("flag", mapping.get("flag"), "flags")

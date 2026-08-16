@@ -124,6 +124,9 @@ class AssetLoader:
         # Fast structural validation happens on individual loads; the full
         # story pass below additionally checks cross-scene targets/assets.
         from engine.core.exploration import validate_exploration_scene
+        from engine.story_core.compat import has_legacy_object_interactions, migrate_legacy_object_interactions
+        if has_legacy_object_interactions(data):
+            data = migrate_legacy_object_interactions(data)
         validate_exploration_scene(data, scene_id)
         return data
 

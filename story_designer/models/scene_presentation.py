@@ -53,9 +53,11 @@ class SceneGeometryTarget:
 @dataclass(frozen=True)
 class SceneObjectPresentation:
     id: str
+    name: str | None
     position: tuple[int, int]
     size: tuple[int, int] | None
     z: int
+    rotation: float
     sprite: str | None
     sprite_path: Path | None
     asset_error: str | None = None
@@ -239,9 +241,11 @@ def _object_presentation(project: StoryProject, raw: Any, index: int) -> SceneOb
     condition = entry.get("visible_when", entry.get("conditions"))
     return SceneObjectPresentation(
         id=object_id,
+        name=entry.get("name") if isinstance(entry.get("name"), str) and entry.get("name") else None,
         position=_pair(entry.get("position"), (0, 0)),
         size=size,
         z=_integer(entry.get("z"), 0),
+        rotation=float(entry.get("rotation", 0)) if isinstance(entry.get("rotation"), (int, float)) and not isinstance(entry.get("rotation"), bool) else 0.0,
         sprite=sprite,
         sprite_path=path,
         asset_error=error,

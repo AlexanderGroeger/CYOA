@@ -411,3 +411,38 @@ def test_look_region_spinbox_step_is_immediate_and_contextual(qapp, tmp_path: Pa
     finally:
         window.session.revert_all()
         window.close()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_object_context_tab_edits_identity_transform_and_z_order(qapp, tmp_path: Path) -> None:
+    session, selection = _scene_session(tmp_path)
+    window = MainWindow()
+    try:
+        window.session.load(session.story_root, session.shared_assets_root)
+        window.session.select(selection)
+        window._refresh_views()
+        ref = SceneElementSelection("intro", "object", "lamp")
+        window.workspace.scene_editor.select_element(ref)
+        qapp.processEvents()
+
+        assert window.inspector.context_tabs.currentWidget() is window.inspector.object_context_page
+        assert window.inspector.context_tabs.isTabVisible(2)
+        assert window.inspector.object_identity_id.text() == "lamp"
+        assert window.inspector._scene_geometry_fields["x"].value() == 40
+        assert window.inspector._scene_geometry_fields["z"].value() == 7
+
+        window.inspector.object_name_edit.setText("Reading Lamp")
+        window.inspector.object_name_edit.editingFinished.emit()
+        window.inspector._scene_geometry_fields["rotation"].setValue(25)
+        window.inspector._scene_geometry_fields["z"].setValue(12)
+        qapp.processEvents()
+
+        object_mapping = window.session.working_mapping(selection)["exploration"]["objects"][0]
+        assert object_mapping["name"] == "Reading Lamp"
+        assert object_mapping["rotation"] == 25.0
+        assert object_mapping["z"] == 12
+        assert window.workspace.scene_editor.object_items["lamp"].rotation() == 25
+        assert window.workspace.scene_editor.object_items["lamp"].zValue() == 112
+    finally:
+        window.session.revert_all()
+        window.close()

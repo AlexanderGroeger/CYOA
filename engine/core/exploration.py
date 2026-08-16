@@ -49,6 +49,24 @@ class DialogueSequence:
 
 
 @dataclass
+class ObjectRuntimeState:
+    """Mutable presentation state for one authored scene object.
+
+    The definition loaded from Story Core is never changed by gameplay.  A
+    state is created lazily when an action first transforms an object, so
+    ordinary scenes pay no extra setup cost.
+    """
+
+    x: int | None = None
+    y: int | None = None
+    rotation: float | None = None
+    sprite: str | None = None
+    animation: str | None = None
+    visible: bool | None = None
+    destroyed: bool = False
+
+
+@dataclass
 class SceneRuntime:
     """Non-persistent object presentation state for one active scene.
 
@@ -61,12 +79,64 @@ class SceneRuntime:
     shown_objects: set[str] = field(default_factory=set)
     sprite_overrides: dict[str, str] = field(default_factory=dict)
     object_animations: dict[str, str] = field(default_factory=dict)
+    object_states: dict[str, ObjectRuntimeState] = field(default_factory=dict)
+    _transitions: dict[str, tuple[str, str, float, float, int, int]] = field(default_factory=dict, repr=False)
+
+    def state_for(self, object_id: str) -> ObjectRuntimeState:
+        return self.object_states.setdefault(object_id, ObjectRuntimeState())
+
+    def update(self, now_ms: int) -> None:
+        """Advance timed transforms without mutating authored definitions."""
+
+        for transition_key, (object_id, kind, start, target, began_ms, duration_ms) in tuple(self._transitions.items()):
+            elapsed = max(0, now_ms - began_ms)
+            progress = 1.0 if duration_ms <= 0 else min(1.0, elapsed / duration_ms)
+            value = start + (target - start) * progress
+            state = self.state_for(object_id)
+            if kind == "x":
+                state.x = round(value)
+            elif kind == "y":
+                state.y = round(value)
+            else:
+                state.rotation = value
+            if progress >= 1.0:
+                self._transitions.pop(transition_key, None)
+
+    def move_object(self, object_id: str, x: int, y: int, *, duration_ms: int = 0, now_ms: int = 0) -> None:
+        state = self.state_for(object_id)
+        current_x = state.x if state.x is not None else x
+        current_y = state.y if state.y is not None else y
+        if duration_ms > 0:
+            self._transitions.pop(f"{object_id}:x", None)
+            self._transitions.pop(f"{object_id}:y", None)
+            self._transitions[f"{object_id}:x"] = (object_id, "x", float(current_x), float(x), now_ms, duration_ms)
+            self._transitions[f"{object_id}:y"] = (object_id, "y", float(current_y), float(y), now_ms, duration_ms)
+        else:
+            state.x, state.y = int(x), int(y)
+
+    def rotate_object(self, object_id: str, angle: float, *, duration_ms: int = 0, now_ms: int = 0) -> None:
+        state = self.state_for(object_id)
+        current = state.rotation if state.rotation is not None else 0.0
+        if duration_ms > 0:
+            self._transitions[f"{object_id}:rotation"] = (object_id, "rotation", float(current), float(angle), now_ms, duration_ms)
+        else:
+            state.rotation = float(angle)
+
+    def destroy_object(self, object_id: str) -> None:
+        self.state_for(object_id).destroyed = True
+        self.hidden_objects.discard(object_id)
+        self.shown_objects.discard(object_id)
 
     def hide_object(self, object_id: str) -> None:
+        self.state_for(object_id).visible = False
         self.hidden_objects.add(object_id)
         self.shown_objects.discard(object_id)
 
     def show_object(self, object_id: str) -> None:
+        state = self.state_for(object_id)
+        if state.destroyed:
+            return
+        state.visible = True
         self.shown_objects.add(object_id)
         self.hidden_objects.discard(object_id)
 
@@ -136,6 +206,11 @@ class EventRunner:
             "show_object": self._show_object,
             "hide_object": self._hide_object,
             "change_sprite": self._change_sprite,
+            "change_object_sprite": self._change_sprite,
+            "move_object": self._move_object,
+            "rotate_object": self._rotate_object,
+            "play_object_animation": self._play_object_animation,
+            "destroy_object": self._destroy_object,
             "wait": self._wait,
             "scene_transition": self._scene_transition,
             "trigger_event": self._trigger_event,
@@ -143,6 +218,7 @@ class EventRunner:
 
     def advance(self, now_ms: int = 0) -> list[EventSignal]:
         """Execute as much of the action list as safely possible this frame."""
+        self.runtime.update(now_ms)
         if self.finished or self.waiting_for_dialogue:
             return []
         if self.wait_until_ms is not None:
@@ -209,11 +285,15 @@ class EventRunner:
         return [EventSignal("music", {"file": filename, "stop": bool(action.get("stop", False))})]
 
     def _animation(self, action: dict[str, Any], _now_ms: int) -> list[EventSignal]:
-        target, animation = action.get("target"), action.get("animation")
+        target, animation = _object_target(action), action.get("animation")
         if not isinstance(target, str) or not target or not isinstance(animation, str) or not animation:
             raise StoryValidationError("exploration animation action requires target and animation")
         self.runtime.object_animations[target] = animation
+        self.runtime.state_for(target).animation = animation
         return [EventSignal("animation", {"target": target, "animation": animation})]
+
+    def _play_object_animation(self, action: dict[str, Any], now_ms: int) -> list[EventSignal]:
+        return self._animation(action, now_ms)
 
     def _set_flag(self, action: dict[str, Any], _now_ms: int) -> list[EventSignal]:
         flag = _required_string(action, "flag", "set_flag")
@@ -258,17 +338,48 @@ class EventRunner:
         return []
 
     def _show_object(self, action: dict[str, Any], _now_ms: int) -> list[EventSignal]:
-        self.runtime.show_object(_required_string(action, "target", "show_object"))
+        self.runtime.show_object(_object_target(action, "show_object"))
         return []
 
     def _hide_object(self, action: dict[str, Any], _now_ms: int) -> list[EventSignal]:
-        self.runtime.hide_object(_required_string(action, "target", "hide_object"))
+        self.runtime.hide_object(_object_target(action, "hide_object"))
         return []
 
     def _change_sprite(self, action: dict[str, Any], _now_ms: int) -> list[EventSignal]:
-        target = _required_string(action, "target", "change_sprite")
+        target = _object_target(action, "change_sprite")
         sprite = _required_string(action, "sprite", "change_sprite")
         self.runtime.sprite_overrides[target] = sprite
+        self.runtime.state_for(target).sprite = sprite
+        return []
+
+    def _move_object(self, action: dict[str, Any], now_ms: int) -> list[EventSignal]:
+        target = _object_target(action, "move_object")
+        position = action.get("position")
+        if isinstance(position, (list, tuple)) and len(position) == 2:
+            x, y = position
+        else:
+            x, y = action.get("x"), action.get("y")
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in (x, y)):
+            raise StoryValidationError("move_object requires numeric x and y or a two-value position")
+        duration = _duration_ms(action, "move_object")
+        self.runtime.move_object(target, round(float(x)), round(float(y)), duration_ms=duration, now_ms=now_ms)
+        if duration:
+            self.wait_until_ms = now_ms + duration
+        return []
+
+    def _rotate_object(self, action: dict[str, Any], now_ms: int) -> list[EventSignal]:
+        target = _object_target(action, "rotate_object")
+        angle = action.get("angle", action.get("rotation"))
+        if isinstance(angle, bool) or not isinstance(angle, (int, float)):
+            raise StoryValidationError("rotate_object requires a numeric angle in degrees")
+        duration = _duration_ms(action, "rotate_object")
+        self.runtime.rotate_object(target, float(angle), duration_ms=duration, now_ms=now_ms)
+        if duration:
+            self.wait_until_ms = now_ms + duration
+        return []
+
+    def _destroy_object(self, action: dict[str, Any], _now_ms: int) -> list[EventSignal]:
+        self.runtime.destroy_object(_object_target(action, "destroy_object"))
         return []
 
     def _wait(self, action: dict[str, Any], now_ms: int) -> list[EventSignal]:
@@ -421,7 +532,12 @@ def available_navigation(scene: Mapping[str, Any], state: GameState) -> list[dic
 
 def resolve_scene_objects(scene: Mapping[str, Any], state: GameState,
                           runtime: SceneRuntime | None = None) -> list[dict[str, Any]]:
-    """Return visible object copies in declaration order, never mutating YAML."""
+    """Return visible object copies with runtime overrides applied.
+
+    The returned dictionaries are transient renderer input.  Authored object
+    definitions remain untouched even after transforms, sprite changes, or
+    destruction.
+    """
     config = exploration_config(scene) or {}
     raw = config.get("objects", [])
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, Mapping)):
@@ -434,13 +550,42 @@ def resolve_scene_objects(scene: Mapping[str, Any], state: GameState,
         object_id = entry.get("id")
         if not isinstance(object_id, str) or not object_id:
             raise StoryValidationError(f"exploration.objects[{order}].id must be a non-empty string")
-        visible = evaluate_conditions(entry.get("visible_when", entry.get("conditions")), state)
+        object_state = runtime.object_states.get(object_id)
+        if object_state is not None and object_state.destroyed:
+            continue
+        if object_state is not None and object_state.x is None and object_state.y is None:
+            position = entry.get("position")
+            if isinstance(position, (list, tuple)) and len(position) == 2:
+                object_state.x, object_state.y = int(position[0]), int(position[1])
+        if object_state is not None and object_state.rotation is None:
+            rotation = entry.get("rotation")
+            if isinstance(rotation, (int, float)) and not isinstance(rotation, bool):
+                object_state.rotation = float(rotation)
+        visible = bool(entry.get("visible", True)) and evaluate_conditions(entry.get("visible_when", entry.get("conditions")), state)
+        if object_state is not None and object_state.visible is not None:
+            visible = object_state.visible
         if object_id in runtime.shown_objects:
             visible = True
         if object_id in runtime.hidden_objects:
             visible = False
         if visible:
             copy = dict(entry)
+            if object_state is not None:
+                if object_state.x is not None or object_state.y is not None:
+                    original = entry.get("position", (0, 0))
+                    ox, oy = original if isinstance(original, (list, tuple)) and len(original) == 2 else (0, 0)
+                    copy["position"] = [object_state.x if object_state.x is not None else ox,
+                                        object_state.y if object_state.y is not None else oy]
+                if object_state.rotation is not None:
+                    copy["rotation"] = object_state.rotation
+                if object_state.sprite is not None:
+                    copy["sprite"] = object_state.sprite
+                if object_state.animation is not None:
+                    copy["animation"] = object_state.animation
+            if object_id in runtime.sprite_overrides:
+                copy["sprite"] = runtime.sprite_overrides[object_id]
+            if object_id in runtime.object_animations:
+                copy["animation"] = runtime.object_animations[object_id]
             copy["_order"] = order
             copy["visible"] = True
             result.append(copy)
@@ -450,22 +595,22 @@ def resolve_scene_objects(scene: Mapping[str, Any], state: GameState,
 def resolve_look_targets(scene: Mapping[str, Any], state: GameState,
                          runtime: SceneRuntime | None = None) -> list[LookTarget]:
     """Resolve visible object targets and invisible regions in stable order."""
+    # Direct headless callers may still hand the runtime a raw legacy scene.
+    # Normalize it at the compatibility boundary; the normal game path has
+    # already done this through AssetLoader/LegacyProjectView.
+    from engine.story_core.compat import migrate_legacy_object_interactions
+    scene = migrate_legacy_object_interactions(scene, preserve_object_ids=True)
     config = exploration_config(scene) or {}
     targets: list[LookTarget] = []
     order = 0
-    for obj in resolve_scene_objects(scene, state, runtime):
-        look = _resolved_look_spec(obj.get("look"), state)
-        if look is not None:
-            target = _make_look_target(obj.get("id"), look, obj, order)
-            if target is not None:
-                targets.append(target)
-                order += 1
     regions = config.get("look_regions", [])
     if not isinstance(regions, Sequence) or isinstance(regions, (str, bytes, Mapping)):
         raise StoryValidationError("exploration.look_regions must be a list")
     for index, region in enumerate(regions):
         if not isinstance(region, Mapping):
             raise StoryValidationError(f"exploration.look_regions[{index}] must be a mapping")
+        if region.get("visible", True) is False:
+            continue
         if not evaluate_conditions(region.get("visible_when", region.get("conditions")), state):
             continue
         look = _resolved_look_spec(region.get("look", region), state)
@@ -552,13 +697,15 @@ def normalise_event_action(raw: Mapping[str, Any]) -> dict[str, Any]:
         action = dict(raw)
         if not isinstance(action["type"], str) or not action["type"]:
             raise StoryValidationError("exploration event action type must be a non-empty string")
-        aliases = {"play_sfx": "sound", "play_sound": "sound", "play_music": "music", "goto": "scene_transition"}
+        aliases = {"play_sfx": "sound", "play_sound": "sound", "play_music": "music", "goto": "scene_transition",
+                   "play_animation": "play_object_animation"}
         action["type"] = aliases.get(action["type"], action["type"])
         return action
     if len(raw) != 1:
         raise StoryValidationError("exploration event action needs type or one legacy action key")
     key, value = next(iter(raw.items()))
-    aliases = {"play_sfx": "sound", "add_item": "give_item", "goto": "scene_transition"}
+    aliases = {"play_sfx": "sound", "add_item": "give_item", "goto": "scene_transition",
+               "play_animation": "play_object_animation"}
     action_type = aliases.get(key, key)
     if action_type == "set_flag" and isinstance(value, Mapping) and len(value) == 1:
         flag, flag_value = next(iter(value.items()))
@@ -573,6 +720,11 @@ def normalise_event_action(raw: Mapping[str, Any]) -> dict[str, Any]:
         return {"type": "scene_transition", "scene": value}
     if action_type == "dialog":
         return {"type": "dialog", "dialog": value}
+    if action_type in {"show_object", "hide_object", "destroy_object", "move_object", "rotate_object",
+                       "change_sprite", "change_object_sprite", "animation", "play_object_animation"}:
+        if isinstance(value, Mapping):
+            return {"type": action_type, **value}
+        return {"type": action_type, "target": value}
     return {"type": action_type, "value": value}
 
 
@@ -675,6 +827,13 @@ def validate_exploration_scene(scene: Mapping[str, Any], scene_id: str, *, known
             raise StoryValidationError(f"{prefix}.objects[{index}].sprite must be a non-empty string")
         if "position" in obj:
             _point(obj["position"], f"{prefix}.objects[{index}].position")
+        if "size" in obj:
+            _size(obj["size"], f"{prefix}.objects[{index}].size")
+        for numeric_key in ("z", "rotation"):
+            if numeric_key in obj and (isinstance(obj[numeric_key], bool) or not isinstance(obj[numeric_key], (int, float))):
+                raise StoryValidationError(f"{prefix}.objects[{index}].{numeric_key} must be numeric")
+        if "visible" in obj and not isinstance(obj["visible"], bool):
+            raise StoryValidationError(f"{prefix}.objects[{index}].visible must be true or false")
         validate_conditions(obj.get("visible_when", obj.get("conditions")), f"{prefix}.objects[{index}].visible_when")
         if isinstance(obj.get("look"), Mapping):
             target_specs.append((object_id, obj["look"], obj))
@@ -742,8 +901,9 @@ def _validate_event_action(raw: Any, context: str, sequences: Mapping[str, Any],
                            known_scene_ids: set[str] | None) -> None:
     action = normalise_event_action(raw)
     action_type = action["type"]
-    allowed = {"dialog", "sound", "music", "animation", "set_flag", "clear_flag", "give_item", "remove_item",
-               "heal", "damage", "change_stat", "show_object", "hide_object", "change_sprite", "wait",
+    allowed = {"dialog", "sound", "music", "animation", "play_object_animation", "set_flag", "clear_flag", "give_item", "remove_item",
+               "heal", "damage", "change_stat", "show_object", "hide_object", "change_sprite", "change_object_sprite",
+               "move_object", "rotate_object", "destroy_object", "wait",
                "scene_transition", "trigger_event"}
     if action_type not in allowed:
         raise StoryValidationError(f"{context}.type has unknown action {action_type!r}")
@@ -759,17 +919,37 @@ def _validate_event_action(raw: Any, context: str, sequences: Mapping[str, Any],
     elif action_type == "music":
         if not action.get("stop"):
             _required_string(action, "file", context)
-    elif action_type == "animation":
-        target = _required_string(action, "target", context)
+    elif action_type in {"animation", "play_object_animation"}:
+        target = _object_target(action, context)
         if target not in object_ids:
             raise StoryValidationError(f"{context}.target references nonexistent object {target!r}")
         _required_string(action, "animation", context)
-    elif action_type in {"show_object", "hide_object", "change_sprite"}:
-        target = _required_string(action, "target", context)
+    elif action_type in {"show_object", "hide_object", "change_sprite", "change_object_sprite", "destroy_object"}:
+        target = _object_target(action, context)
         if target not in object_ids:
             raise StoryValidationError(f"{context}.target references nonexistent object {target!r}")
-        if action_type == "change_sprite":
+        if action_type in {"change_sprite", "change_object_sprite"}:
             _required_string(action, "sprite", context)
+    elif action_type == "move_object":
+        target = _object_target(action, context)
+        if target not in object_ids:
+            raise StoryValidationError(f"{context}.target references nonexistent object {target!r}")
+        position = action.get("position")
+        if isinstance(position, (list, tuple)) and len(position) == 2:
+            _point(position, f"{context}.position")
+        else:
+            for key in ("x", "y"):
+                if isinstance(action.get(key), bool) or not isinstance(action.get(key), (int, float)):
+                    raise StoryValidationError(f"{context}.{key} must be numeric")
+        _duration_ms(action, context)
+    elif action_type == "rotate_object":
+        target = _object_target(action, context)
+        if target not in object_ids:
+            raise StoryValidationError(f"{context}.target references nonexistent object {target!r}")
+        angle = action.get("angle", action.get("rotation"))
+        if isinstance(angle, bool) or not isinstance(angle, (int, float)):
+            raise StoryValidationError(f"{context}.angle must be numeric degrees")
+        _duration_ms(action, context)
     elif action_type in {"give_item", "remove_item"}:
         item = _required_string(action, "item", context)
         if item_ids is not None and item not in item_ids:
@@ -805,6 +985,22 @@ def _required_string(data: Mapping[str, Any], key: str, context: str) -> str:
     if not isinstance(value, str) or not value:
         raise StoryValidationError(f"{context}.{key} must be a non-empty string")
     return value
+
+
+def _object_target(data: Mapping[str, Any], context: str = "object action") -> str:
+    """Read both the current ``target`` spelling and the documented ``object`` spelling."""
+
+    value = data.get("target", data.get("object", data.get("object_id")))
+    if not isinstance(value, str) or not value:
+        raise StoryValidationError(f"{context} requires an object reference")
+    return value
+
+
+def _duration_ms(data: Mapping[str, Any], context: str) -> int:
+    value = data.get("duration", data.get("duration_seconds", 0))
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise StoryValidationError(f"{context} duration must be a non-negative number of seconds")
+    return round(float(value) * 1000)
 
 
 def _required_text(value: Any, context: str) -> str:
@@ -846,6 +1042,16 @@ def _point(raw: Any, context: str) -> tuple[int, int]:
         raise StoryValidationError(f"{context} must be [x, y]")
     if any(isinstance(value, bool) or not isinstance(value, int) for value in raw):
         raise StoryValidationError(f"{context} values must be integers")
+    return int(raw[0]), int(raw[1])
+
+
+def _size(raw: Any, context: str) -> tuple[int, int]:
+    if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+        raise StoryValidationError(f"{context} must contain width and height")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in raw):
+        raise StoryValidationError(f"{context} values must be numeric")
+    if raw[0] <= 0 or raw[1] <= 0:
+        raise StoryValidationError(f"{context} width and height must be positive")
     return int(raw[0]), int(raw[1])
 
 

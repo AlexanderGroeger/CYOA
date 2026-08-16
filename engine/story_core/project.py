@@ -1588,8 +1588,17 @@ def _exploration_asset_references(
     objects, objects_path = _exploration_section(config, "objects", scene=scene, default=[])
     if isinstance(objects, Sequence) and not isinstance(objects, (str, bytes, Mapping)):
         for index, value in enumerate(objects):
-            if isinstance(value, Mapping) and isinstance(value.get("sprite"), str) and value["sprite"]:
+            if not isinstance(value, Mapping):
+                continue
+            if isinstance(value.get("sprite"), str) and value["sprite"]:
                 yield ("sprites", (*objects_path, index, "sprite")), value["sprite"]
+            if isinstance(value.get("animation"), str) and value["animation"]:
+                yield ("animation", (*objects_path, index, "animation")), value["animation"]
+            animations = value.get("animations")
+            if isinstance(animations, Mapping):
+                for animation_id, identifier in animations.items():
+                    if isinstance(identifier, str) and identifier:
+                        yield ("animation", (*objects_path, index, "animations", str(animation_id))), identifier
     for actions_path, actions in _exploration_action_sets(config, scene=scene):
         if not isinstance(actions, Sequence) or isinstance(actions, (str, bytes, Mapping)):
             continue
@@ -1611,11 +1620,11 @@ def _exploration_asset_references(
                 filename, field = _exploration_action_filename(payload, scalar_payload, "music")
                 if isinstance(filename, str) and filename:
                     yield ("music", _exploration_action_field_path(action, action_path, field)), filename
-            elif adapted.action_type == "animation":
+            elif adapted.action_type in {"animation", "play_object_animation"}:
                 identifier = payload.get("animation")
                 if isinstance(identifier, str) and identifier:
                     yield ("animation", _exploration_action_field_path(action, action_path, "animation")), identifier
-            elif adapted.action_type == "change_sprite":
+            elif adapted.action_type in {"change_sprite", "change_object_sprite"}:
                 sprite = payload.get("sprite")
                 if isinstance(sprite, str) and sprite:
                     yield ("sprites", _exploration_action_field_path(action, action_path, "sprite")), sprite

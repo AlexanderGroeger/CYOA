@@ -163,6 +163,47 @@ def test_runtime_object_changes_are_nonpersistent_scene_presentation_state():
     assert "drawer" in runtime.shown_objects and "drawer" not in runtime.hidden_objects
 
 
+def test_canonical_object_actions_update_runtime_state_and_destroy_only_the_runtime_copy():
+    scene = {
+        "id": "study",
+        "exploration": {
+            "objects": [{"id": "drawer", "position": [10, 20], "size": [30, 15], "sprite": "closed.png"}],
+        },
+    }
+    authored = scene["exploration"]["objects"][0].copy()
+    runtime = SceneRuntime()
+    runner = EventRunner([
+        {"type": "move_object", "object": "drawer", "position": [40, 50]},
+        {"type": "rotate_object", "object": "drawer", "angle": 30},
+        {"type": "change_object_sprite", "object": "drawer", "sprite": "open.png"},
+        {"type": "play_object_animation", "object": "drawer", "animation": "open"},
+        {"type": "destroy_object", "object": "drawer"},
+    ], GameState(), runtime)
+    runner.advance()
+
+    state = runtime.object_states["drawer"]
+    assert (state.x, state.y, state.rotation, state.sprite, state.animation, state.destroyed) == (
+        40, 50, 30.0, "open.png", "open", True,
+    )
+    assert resolve_scene_objects(scene, GameState(), runtime) == []
+    assert scene["exploration"]["objects"][0] == authored
+
+
+def test_move_object_duration_advances_without_rewriting_authored_object():
+    runtime = SceneRuntime()
+    runtime.state_for("drawer").x = 0
+    runtime.state_for("drawer").y = 0
+    runner = EventRunner([
+        {"type": "move_object", "target": "drawer", "x": 100, "y": 40, "duration": 1.0},
+    ], GameState(), runtime)
+    runner.advance(0)
+    assert not runner.finished
+    runner.advance(500)
+    assert runtime.object_states["drawer"].x == 50
+    runner.advance(1000)
+    assert runner.finished and runtime.object_states["drawer"].x == 100
+
+
 def test_validator_reports_bad_references_and_schema_fields_with_context():
     broken = {"id": "study", "exploration": {"navigation": [{"scene": "missing"}], "look_regions": [
         {"id": "bad", "rect": [0, 0, 0, 1], "event": "missing", "interaction": "inspect"},

@@ -7,6 +7,7 @@ runtime loading or save persistence.
 """
 
 from .legacy_views import LegacyProjectView
+from .object_interaction import DEFAULT_OBJECT_SIZE, has_legacy_object_interactions, migrate_legacy_object_interactions
 from .save_adapter import (
     SaveCompatibilityAdapter,
     SaveReferenceValidator,
@@ -16,6 +17,9 @@ from .save_adapter import (
 
 __all__ = [
     "LegacyProjectView",
+    "DEFAULT_OBJECT_SIZE",
+    "has_legacy_object_interactions",
+    "migrate_legacy_object_interactions",
     "SaveCompatibilityAdapter",
     "SaveReferenceValidator",
     "validate_save_references",

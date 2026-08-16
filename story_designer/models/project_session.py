@@ -13,7 +13,13 @@ import tempfile
 from types import MappingProxyType
 from typing import Any
 
-from engine.story_core import ContentKind, Diagnostics, StoryProject, load_story_project
+from engine.story_core import (
+    ContentKind,
+    Diagnostics,
+    StoryProject,
+    load_story_project,
+    migrate_legacy_object_interactions,
+)
 
 from .persistence import (
     ExternalChangeConflict,
@@ -139,10 +145,32 @@ class ProjectSession:
         self._source_working_copies.clear()
         self._history.clear()
         self._redo_history.clear()
+        self._migrate_legacy_scene_interactions()
         self._source_baseline = capture_source_baseline(root, project.source_documents.keys())
         self.diagnostics = project.validate()
         self.selection = self._restore_selection(previous_selection)
         return project
+
+    def _migrate_legacy_scene_interactions(self) -> None:
+        """Canonicalize retired object interaction in editor working state.
+
+        This intentionally does not append an undo command: opening an old
+        story establishes the new canonical working representation, and Save
+        is the explicit persistence boundary.  Source files are untouched
+        until that Save succeeds.
+        """
+
+        if self.project is None:
+            return
+        for scene_id, definition in self.project.scenes.items():
+            original = definition.to_mapping()
+            migrated = migrate_legacy_object_interactions(original)
+            if migrated == original:
+                continue
+            selection = DefinitionSelection(ContentKind.SCENE, scene_id, getattr(definition, "source", None))
+            copy = self.working_copy(selection)
+            if copy is not None:
+                copy.mapping = migrated
 
     def reload(self, shared_assets_root: str | Path | None = None) -> StoryProject:
         """Build a new ``StoryProject`` from the current source files."""
@@ -230,6 +258,8 @@ class ProjectSession:
         else:
             mapping = definition.to_mapping()
         existing = DefinitionWorkingCopy.from_mapping(selection, mapping, self.schema_for(selection))
+        if selection.kind is ContentKind.SCENE:
+            existing.mapping = migrate_legacy_object_interactions(existing.mapping)
         self._working_copies[selection] = existing
         return existing
 
