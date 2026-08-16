@@ -132,6 +132,7 @@ def test_browser_picker_search_and_external_file_safety(qapp, tmp_path: Path, mo
     browser = AssetBrowserWidget(source, expected_kind="sfx", picker_mode=True)
     browser.search.setText("door")
     assert browser.asset_list.count() == 1
+    browser.asset_list.setCurrentRow(0)
     assert browser.choose_current() is not None
     assert browser.selected_asset.reference == "door.wav"
 
@@ -161,8 +162,20 @@ def test_picker_context_locks_type_and_uses_category_title(qapp, tmp_path: Path)
     assert dialog.browser.type_filter.count() == 1
     assert dialog.browser.type_filter.currentData() == "backgrounds"
     assert dialog.browser.asset_list.count() == 1
+    assert dialog.browser.selected_asset is None
     assert dialog.browser.asset_list.item(0).data(Qt.ItemDataRole.UserRole).asset_kind == "backgrounds"
     dialog.reject()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_picker_does_not_autoplay_or_preview_first_audio(qapp, tmp_path: Path) -> None:
+    source = StorySource(tmp_path / "story", tmp_path / "shared")
+    _touch(tmp_path / "shared" / "music" / "theme.ogg")
+    browser = AssetBrowserWidget(source, picker_category="music", picker_mode=True)
+    assert browser.asset_list.count() == 1
+    assert browser.selected_asset is None
+    assert not browser.audio_player.source().isValid()
+    browser.close()
 
 
 @pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")

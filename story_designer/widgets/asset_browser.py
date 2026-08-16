@@ -253,9 +253,11 @@ class AssetBrowserWidget(QWidget):
             if current_key == _record_key(record):
                 self.asset_list.setCurrentItem(item)
         self.asset_list.blockSignals(False)
-        if self.asset_list.currentItem() is None and self.asset_list.count():
-            self.asset_list.setCurrentRow(0)
-        elif not self.asset_list.count():
+        if self.asset_list.currentItem() is None:
+            # Opening or changing filters must not implicitly select the first
+            # record.  A preview (especially audio) starts only after the user
+            # explicitly selects an item, or a current authored reference is
+            # restored by set_current_reference().
             self._show_record(None)
         elif current_key is not None and self.asset_list.currentItem() is not None:
             current = self.asset_list.currentItem().data(Qt.ItemDataRole.UserRole)
