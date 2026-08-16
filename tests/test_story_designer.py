@@ -112,6 +112,116 @@ def test_project_browser_populates_core_categories(qapp, tmp_path: Path) -> None
     assert {"Manifest", "Player", "Scenes", "Items", "Battles", "Combat Moves", "Event Pools", "Animations", "Audio Configuration"} <= categories
 
 
+def _child(item, label: str):
+    return next(item.child(index) for index in range(item.childCount()) if item.child(index).text(0) == label)
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_project_browser_nested_folders_names_and_single_column(qapp, tmp_path: Path) -> None:
+    story_root, shared_root = write_fixture_story(tmp_path)
+    (story_root / "scenes/deer").mkdir(parents=True)
+    (story_root / "scenes/deer/deer_pet.yaml").write_text(
+        "id: deer_pet\nname: Pet the Deer\ntext: Pet.\n", encoding="utf-8"
+    )
+    (story_root / "scenes/deer/deer_run.yaml").write_text(
+        "id: deer_run\nname: Deer Run\ntext: Run.\n", encoding="utf-8"
+    )
+    (story_root / "scenes/chapter/forest/deer").mkdir(parents=True)
+    (story_root / "scenes/chapter/forest/deer/deep.yaml").write_text(
+        "id: deep\nname: Deep Scene\ntext: Deep.\n", encoding="utf-8"
+    )
+
+    browser = ProjectBrowser()
+    browser.set_project(load_story_project(story_root, shared_root))
+    root = browser.tree.topLevelItem(0)
+    scenes = _child(root, "Scenes")
+    deer = _child(scenes, "deer")
+    assert browser.tree.columnCount() == 1
+    assert browser.tree.headerItem().text(0) == "Project"
+    assert [deer.child(index).text(0) for index in range(deer.childCount())] == ["Deer Run", "Pet the Deer"]
+
+    chapter = _child(scenes, "chapter")
+    forest = _child(chapter, "forest")
+    assert _child(forest, "deer").child(0).text(0) == "Deep Scene"
+    assert scenes.font(0).bold()
+    assert not deer.font(0).bold()
+
+    pet = _child(deer, "Pet the Deer")
+    selection = pet.data(0, browser._SELECTION_ROLE)
+    assert selection == DefinitionSelection(ContentKind.SCENE, "deer_pet", story_root / "scenes/deer/deer_pet.yaml")
+    assert "ID: deer_pet" in pet.toolTip(0)
+    assert "Source: scenes/deer/deer_pet.yaml" in pet.toolTip(0)
+
+    ending = _child(scenes, "ending")
+    assert ending.text(0) == "ending"
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_project_browser_search_is_recursive_whitelist_and_reactive(qapp, tmp_path: Path) -> None:
+    story_root, shared_root = write_fixture_story(tmp_path)
+    (story_root / "scenes/deer").mkdir(parents=True)
+    (story_root / "scenes/deer/deer_pet.yaml").write_text(
+        "id: deer_pet\nname: Pet the Deer\ntext: Pet.\n", encoding="utf-8"
+    )
+    (story_root / "scenes/deer/deer_run.yaml").write_text(
+        "id: deer_run\nname: Deer Run\ntext: Run.\n", encoding="utf-8"
+    )
+    (story_root / "scenes/meadow").mkdir(parents=True)
+    (story_root / "scenes/meadow/quiet.yaml").write_text(
+        "id: quiet\nname: Quiet Meadow\ntext: Quiet.\n", encoding="utf-8"
+    )
+    browser = ProjectBrowser()
+    browser.set_project(load_story_project(story_root, shared_root))
+    root = browser.tree.topLevelItem(0)
+    scenes = _child(root, "Scenes")
+    deer = _child(scenes, "deer")
+    pet = _child(deer, "Pet the Deer")
+    run = _child(deer, "Deer Run")
+    meadow = _child(scenes, "meadow")
+
+    browser.search.setText("pet")
+    assert not root.isHidden() and not scenes.isHidden() and not deer.isHidden() and not pet.isHidden()
+    assert run.isHidden() and meadow.isHidden()
+    assert _child(root, "Items").isHidden()
+
+    browser.search.setText("MEADOW")
+    assert not scenes.isHidden() and not meadow.isHidden() and not _child(meadow, "Quiet Meadow").isHidden()
+    assert deer.isHidden()
+
+    browser.search.clear()
+    assert not run.isHidden() and not meadow.isHidden() and not _child(root, "Items").isHidden()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_project_browser_duplicate_names_keep_independent_selections_and_refresh_search(qapp, tmp_path: Path) -> None:
+    story_root, shared_root = write_fixture_story(tmp_path)
+    for folder in ("one", "two"):
+        target = story_root / f"scenes/{folder}/same.yaml"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("id: same\nname: Same Name\ntext: Same.\n", encoding="utf-8")
+    browser = ProjectBrowser()
+    browser.search.setText("Same")
+    browser.set_project(load_story_project(story_root, shared_root))
+
+    same_items = [item for item in browser._items() if item.text(0) == "Same Name"]
+    assert len(same_items) == 2
+    selections = [item.data(0, browser._SELECTION_ROLE) for item in same_items]
+    assert {selection.id for selection in selections} == {"same"}
+    assert {selection.source for selection in selections} == {
+        story_root / "scenes/one/same.yaml",
+        story_root / "scenes/two/same.yaml",
+    }
+    assert all(browser.select(selection) for selection in selections)
+
+    (story_root / "scenes/one/new.yaml").write_text(
+        "id: new\nname: New Name\ntext: New.\n", encoding="utf-8"
+    )
+    browser.set_project(load_story_project(story_root, shared_root))
+    assert browser.search.text() == "Same"
+    assert any(item.text(0) == "Same Name" and not item.isHidden() for item in browser._items())
+    assert all(item.isHidden() for item in browser._items() if item.text(0) == "New Name")
+
+
 @pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
 def test_diagnostics_widget_represents_structured_fields(qapp, tmp_path: Path) -> None:
     source = tmp_path / "story.yaml"

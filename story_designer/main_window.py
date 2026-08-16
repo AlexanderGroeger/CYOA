@@ -122,8 +122,10 @@ class MainWindow(QMainWindow):
     def _create_docks(self) -> None:
         self.project_dock = QDockWidget("Project", self)
         self.project_dock.setObjectName("ProjectDock")
+        self.project_dock.setMinimumWidth(280)
         self.project_dock.setWidget(self.browser)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.project_dock)
+        self.resizeDocks([self.project_dock], [310], Qt.Orientation.Horizontal)
 
         self.inspector_dock = QDockWidget("Inspector", self)
         self.inspector_dock.setObjectName("InspectorDock")

@@ -247,3 +247,14 @@ def qapp():
     if QApplication is None:
         pytest.skip("PySide6 is not installed")
     return QApplication.instance() or QApplication([])
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_project_dock_has_resizable_wider_default(qapp) -> None:
+    window = MainWindow()
+    try:
+        assert window.project_dock.minimumWidth() >= 280
+        assert window.project_dock.width() >= window.project_dock.minimumWidth()
+        assert window.project_dock.maximumWidth() > window.project_dock.minimumWidth()
+    finally:
+        window.close()
