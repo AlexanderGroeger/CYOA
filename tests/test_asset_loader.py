@@ -21,9 +21,9 @@ def loader(tmp_path):
     (story_dir / "player.yaml").write_text(yaml.dump({"stats": {"hp": 9}, "known_moves": ["jab"]}))
     (story_dir / "moves" / "attacks.yaml").write_text(yaml.dump({"moves": [{"id": "jab", "base_power": 1, "pattern": "timing_bar", "pattern_config": {"duration": 1}}]}))
     (story_dir / "scenes" / "intro.yaml").write_text(yaml.dump({"id": "intro", "text": "hello"}))
-    (story_dir / "assets" / "backgrounds" / "forest.txt").write_text("STORY-LOCAL FOREST ART")
-    (shared_dir / "backgrounds" / "cave.txt").write_text("SHARED CAVE ART")
-    (shared_dir / "sprites" / "wolf.txt").write_text("SHARED WOLF SPRITE")
+    (story_dir / "assets" / "backgrounds" / "legacy.txt").write_text("not an image")
+    (shared_dir / "backgrounds" / "legacy.txt").write_text("not an image")
+    (shared_dir / "sprites" / "legacy.txt").write_text("not an image")
 
     return AssetLoader(str(story_dir), str(shared_dir))
 
@@ -41,29 +41,16 @@ def test_load_scene(loader):
     assert loader.load_scene("intro")["text"] == "hello"
 
 
-def test_story_local_asset_takes_precedence(loader):
-    assert loader.load_text_asset("backgrounds", "forest.txt") == "STORY-LOCAL FOREST ART"
-
-
-def test_shared_assets_fallback(loader):
-    assert loader.load_text_asset("backgrounds", "cave.txt") == "SHARED CAVE ART"
-    assert loader.load_text_asset("sprites", "wolf.txt") == "SHARED WOLF SPRITE"
-
-
-def test_missing_asset_raises(loader):
-    with pytest.raises(AssetNotFoundError):
-        loader.load_text_asset("backgrounds", "nonexistent.txt")
-
-
-def test_caching_survives_file_mutation(loader, tmp_path):
-    loader.load_text_asset("backgrounds", "forest.txt")
-    (tmp_path / "story" / "assets" / "backgrounds" / "forest.txt").write_text("MUTATED")
-    assert loader.load_text_asset("backgrounds", "forest.txt") == "STORY-LOCAL FOREST ART"
+def test_visual_asset_resolution_rejects_text_files(loader):
+    with pytest.raises(AssetNotFoundError, match="supported backgrounds asset"):
+        loader.resolve_asset_path("backgrounds", "legacy.txt")
+    with pytest.raises(AssetNotFoundError, match="supported sprites asset"):
+        loader.resolve_asset_reference("legacy.txt", "sprites")
 
 
 def test_is_image_asset(loader):
     assert loader.is_image_asset("cave.png")
-    assert not loader.is_image_asset("cave.txt")
+    assert not loader.is_image_asset("legacy.txt")
 
 
 def test_items_yaml_optional(loader):

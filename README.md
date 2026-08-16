@@ -98,7 +98,7 @@ stories/           story manifests, scenes, assets, and saves
 tests/             headless logic and configuration tests
 ```
 
-Text (`.txt`) and image (`.png`, `.jpg`, etc.) backgrounds and sprites are
+Image backgrounds and sprites (`.png`, `.jpg`, `.jpeg`, `.bmp`, `.gif`) are
 supported. Images and fonts are loaded and cached after pygame initializes.
 
 ## Test

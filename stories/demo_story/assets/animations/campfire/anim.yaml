@@ -1,5 +1,0 @@
-frames:
-  - frame_00.txt
-  - frame_01.txt
-frame_delay_ms: 400
-loop: true

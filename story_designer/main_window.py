@@ -47,7 +47,6 @@ from .models import (
     PersistenceError,
     ProjectValidationError,
     ProjectSession,
-    normalize_story_root,
 )
 from .widgets import AssetBrowserWidget, DiagnosticsWidget, InspectorWidget, ProjectBrowser, WorkspaceWidget
 from .models import SceneElementSelection, SceneGraphEdge
@@ -154,9 +153,6 @@ class MainWindow(QMainWindow):
         self.open_action = QAction("Open Story...", self)
         self.open_action.triggered.connect(self.open_story)
         file_menu.addAction(self.open_action)
-        self.open_directory_action = QAction("Open Story Directory...", self)
-        self.open_directory_action.triggered.connect(self.open_story_directory)
-        file_menu.addAction(self.open_directory_action)
         self.recent_menu = QMenu("Recent Stories", self)
         file_menu.addMenu(self.recent_menu)
         self.close_action = QAction("Close Story", self)
@@ -259,11 +255,10 @@ class MainWindow(QMainWindow):
         self._update_recent_menu()
 
     def open_story(self) -> None:
-        choice = StorySelectionDialog(self).exec()
-        if choice == QDialog.DialogCode.Accepted:
-            path = StorySelectionDialog.selected_path(self)
-            if path is not None:
-                self.open_story_path(path)
+        initial = self._normalise_story_setting("lastStoryPath")
+        path = QFileDialog.getExistingDirectory(self, "Select Story Folder", str(initial or ""))
+        if path:
+            self.open_story_path(Path(path))
 
     def new_story(self) -> None:
         """Collect a small project specification and create it through Core."""
@@ -289,12 +284,6 @@ class MainWindow(QMainWindow):
                 self.workspace.open_scene_editor()
                 self._refresh_views()
         self.statusBar().showMessage(f"Created {spec.title}")
-
-    def open_story_directory(self) -> None:
-        initial = self.settings.value("lastStoryPath", "")
-        path = QFileDialog.getExistingDirectory(self, "Open Story Directory", str(initial))
-        if path:
-            self.open_story_path(Path(path))
 
     def new_definition(self, kind: ContentKind) -> None:
         """Create a persisted top-level definition, then reload and select it."""
@@ -342,7 +331,7 @@ class MainWindow(QMainWindow):
     def open_story_path(self, path: str | Path) -> bool:
         if not self._confirm_unsaved_changes("open another story"):
             return False
-        root = normalize_story_root(path)
+        root = Path(path).expanduser().resolve()
         try:
             self.session.load(root)
         except (StoryProjectLoadError, StoryCoreError, OSError, ValueError, TypeError) as exc:
@@ -1073,7 +1062,30 @@ class MainWindow(QMainWindow):
 
     def _recent_paths(self) -> list[str]:
         value = self.settings.value("recentStories", [])
-        return [str(item) for item in value] if isinstance(value, (list, tuple)) else []
+        values = list(value) if isinstance(value, (list, tuple)) else [value] if isinstance(value, str) else []
+        paths: list[str] = []
+        migrated = False
+        for item in values:
+            path = Path(str(item)).expanduser()
+            if path.name.casefold() == "story.yaml":
+                path = path.parent
+                migrated = True
+            rendered = str(path)
+            if rendered not in paths:
+                paths.append(rendered)
+        if migrated:
+            self.settings.setValue("recentStories", paths)
+        return paths
+
+    def _normalise_story_setting(self, key: str) -> Path | None:
+        value = self.settings.value(key, "")
+        if not isinstance(value, str) or not value.strip():
+            return None
+        path = Path(value).expanduser()
+        if path.name.casefold() == "story.yaml":
+            path = path.parent
+            self.settings.setValue(key, str(path))
+        return path
 
     def _update_recent_menu(self) -> None:
         self.recent_menu.clear()
@@ -1248,49 +1260,3 @@ class NewCombatMoveDialog(QDialog):
         self.identifier = value
         self.qte_type = self.qte_combo.currentText()
         self.accept()
-
-
-class StorySelectionDialog(QDialog):
-    """Small standard-dialog wrapper allowing file or directory selection."""
-
-    _paths: dict[int, Path | None] = {}
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Open Story")
-        self.setModal(True)
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Choose a story.yaml file or a story directory."))
-        file_button = QPushButton("Choose story.yaml...")
-        directory_button = QPushButton("Choose story directory...")
-        layout.addWidget(file_button)
-        layout.addWidget(directory_button)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
-        layout.addWidget(buttons)
-        file_button.clicked.connect(self._choose_file)
-        directory_button.clicked.connect(self._choose_directory)
-        buttons.rejected.connect(self.reject)
-        self._selected: Path | None = None
-
-    @classmethod
-    def selected_path(cls, parent: QWidget) -> Path | None:
-        return cls._paths.pop(id(parent), None)
-
-    def _choose_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Open story.yaml", "", "Story manifest (story.yaml)")
-        if path:
-            self._selected = Path(path)
-            self._store_selection()
-            self.accept()
-
-    def _choose_directory(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Open Story Directory")
-        if path:
-            self._selected = Path(path)
-            self._store_selection()
-            self.accept()
-
-    def _store_selection(self) -> None:
-        parent = self.parentWidget()
-        if parent is not None:
-            self._paths[id(parent)] = self._selected

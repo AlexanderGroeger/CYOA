@@ -1,0 +1,23 @@
+{
+  "save_format_version": 1,
+  "story_id": "designer_test",
+  "story_version": "1.0",
+  "timestamp": 1786846772.6785202,
+  "state": {
+    "current_scene": "start",
+    "flags": {},
+    "variables": {},
+    "inventory": {},
+    "stats": {
+      "hp": 1,
+      "max_hp": 1
+    },
+    "equipment": {},
+    "known_moves": [],
+    "known_combat_moves": {},
+    "history": [
+      "start"
+    ],
+    "ending_reached": null
+  }
+}

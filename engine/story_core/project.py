@@ -1193,11 +1193,9 @@ def _validate_scene_media(project: StoryProject, diagnostics: Diagnostics, scene
                 scene.source,
                 (key,),
                 severity=media_severity,
-                # Exploration preflight accepts story-relative references;
-                # its image renderer does too, while text-art paths receive
-                # an advisory below when only that broad resolution works.
+                # Exploration media uses the same image-only asset rules as
+                # the renderer.
                 category_only=not scene.is_exploration,
-                reference_runtime_mismatch=scene.is_exploration and not project.source.is_image_asset(value),
             )
     value = raw.get("music")
     if isinstance(value, str) and value:
@@ -1320,7 +1318,6 @@ def _validate_exploration(project: StoryProject, diagnostics: Diagnostics, scene
                 category,
                 scene.source,
                 field_path,
-                reference_runtime_mismatch=not project.source.is_image_asset(filename),
             )
     events = config.get("look_events", {})
     sequences = config.get("dialogue_sequences", {})
@@ -1405,6 +1402,14 @@ def _validate_animations(project: StoryProject, diagnostics: Diagnostics) -> Non
         for index, frame in enumerate(frames):
             if not isinstance(frame, str) or not frame:
                 diagnostics.error("invalid_animation_frame", "Animation frames must be non-empty strings", source=animation.source, path=("frames", index))
+                continue
+            if not project.source.is_image_asset(frame):
+                diagnostics.error(
+                    "unsupported_animation_frame",
+                    f"Animation frame {frame!r} is not a supported image asset",
+                    source=animation.source,
+                    path=("frames", index),
+                )
                 continue
             if not (animation.directory / frame).exists():
                 diagnostics.error("missing_asset", f"Animation frame {frame!r} does not exist", source=animation.source, path=("frames", index))
@@ -1657,7 +1662,6 @@ def _validate_asset(
     *,
     severity: DiagnosticSeverity = DiagnosticSeverity.ERROR,
     category_only: bool = False,
-    reference_runtime_mismatch: bool = False,
 ) -> None:
     try:
         if category_only:
@@ -1667,17 +1671,6 @@ def _validate_asset(
     except StorySourceError as exc:
         diagnostics.emit(severity, "missing_asset", str(exc), source=source, path=path)
         return
-    if reference_runtime_mismatch:
-        try:
-            project.source.resolve_asset_path(category, filename)
-        except StorySourceError:
-            diagnostics.advisory(
-                "asset_reference_runtime_mismatch",
-                "This story-relative non-image asset validates for exploration, but its text-art renderer resolves category-relative filenames only.",
-                source=source,
-                path=path,
-            )
-
 
 def _validate_audio_asset(
     project: StoryProject,

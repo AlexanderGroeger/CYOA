@@ -1,0 +1,7 @@
+id: designer_test
+title: Designer Test
+version: '1.0'
+start_scene: start
+display:
+  width: 640
+  height: 360

@@ -1,0 +1,6 @@
+stats:
+  hp: 1
+  max_hp: 1
+inventory: {}
+equipment: {}
+known_moves: []

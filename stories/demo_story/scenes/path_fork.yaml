@@ -1,6 +1,5 @@
 id: path_fork
-background: fork.txt
-sprite: wolf.txt
+sprite: wolf.png
 sprite_position: [26, 0]
 text: |
   The path splits. To the left, it winds off into dense, quiet brush.

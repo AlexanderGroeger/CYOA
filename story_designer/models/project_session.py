@@ -122,7 +122,7 @@ class ProjectSession:
     ) -> StoryProject:
         """Replace the current project after a successful Core load."""
 
-        root = normalize_story_root(story_path)
+        root = Path(story_path).expanduser().resolve()
         shared_root = self.shared_assets_root if shared_assets_root is None else Path(shared_assets_root)
         if shared_root is None:
             project = load_story_project(root)
@@ -526,14 +526,4 @@ def _replace_path(document: Any, path: tuple[Any, ...], value: Any) -> None:
     else:
         raise PersistenceError(f"Cannot locate source definition path {path!r}")
 
-
-def normalize_story_root(path: str | Path) -> Path:
-    """Normalize a directory or ``story.yaml`` selection to the story root."""
-
-    selected = Path(path).expanduser()
-    if selected.name.lower() == "story.yaml":
-        selected = selected.parent
-    return selected.resolve()
-
-
-__all__ = ["DefinitionSelection", "ProjectSession", "normalize_story_root"]
+__all__ = ["DefinitionSelection", "ProjectSession"]

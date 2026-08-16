@@ -1,5 +1,5 @@
 id: ending_neutral
-background: forest.txt
+background: forest.png
 ending: true
 ending_id: walked_away
 text: |

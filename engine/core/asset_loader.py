@@ -2,9 +2,9 @@
 engine/core/asset_loader.py
 
 Everything in the engine that needs to read a story file (scene YAML,
-battle YAML, a background .txt/.png, ...) goes through here. Two jobs:
+battle YAML, a background .png, ...) goes through here. Two jobs:
 
-    1. Resolve asset references (e.g. "forest.txt") by checking the
+    1. Resolve asset references (e.g. "forest.png") by checking the
        story's own assets/<category>/ folder first, then falling back to
        shared_assets/<category>/ -- so common sprites/music can be shared
        across stories while a story can still override with its own.
@@ -25,8 +25,6 @@ from typing import Any
 from engine.errors import AssetNotFoundError, StoryValidationError
 from engine.story_core.source import StorySource, StorySourceError
 
-# Extensions routed through the pygame image pipeline rather than loaded as
-# plain text art. Kept here because AssetLoader resolves the original path.
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif"}
 
 
@@ -80,17 +78,6 @@ class AssetLoader:
             return self._source.load_yaml_legacy(relative_path)
         except FileNotFoundError:
             raise AssetNotFoundError(f"Story file not found: {self.story_dir / relative_path}") from None
-
-    # -- text/binary assets ---------------------------------------------------
-    def load_text_asset(self, category: str, filename: str) -> str:
-        path = self.resolve_asset_path(category, filename)
-        cache_key = str(path)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-        with open(path, "r", encoding="utf-8") as f:
-            data = f.read()
-        self._cache[cache_key] = data
-        return data
 
     # -- convenience loaders for each story data file type -------------------
     def load_manifest(self) -> dict[str, Any]:

@@ -37,7 +37,8 @@ def test_exploration_reference_scenes_have_resolvable_graph_and_assets():
 
     for scene_id, scene in scenes.items():
         assert scene["id"] == scene_id
-        assets.resolve_asset_path("backgrounds", scene["background"])
+        if "background" in scene:
+            assets.resolve_asset_path("backgrounds", scene["background"])
         exploration = scene["exploration"]
         assert isinstance(exploration, dict)
 

@@ -92,7 +92,7 @@ def _kind_matches(record: AssetRecord, expected: str) -> bool:
     actual = canonical_asset_category(record.asset_kind) or record.asset_kind.casefold().rstrip("s")
     if expected in {"", "all", "asset"}:
         return True
-    if expected in {"image", "text-art", "textart"}:
+    if expected == "image":
         return record.is_image or actual in {"background", "sprite", "item"}
     if expected in {"audio", "sound"}:
         return actual in {"music", "sfx"}

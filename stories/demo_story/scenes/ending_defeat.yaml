@@ -1,5 +1,4 @@
 id: ending_defeat
-background: fork.txt
 ending: true
 ending_id: defeated_by_wolf
 text: |

@@ -24,8 +24,12 @@ def test_asset_discovery_uses_story_first_shared_fallback_and_canonical_referenc
     _touch(shadow_local)
     _touch(shared_root / "backgrounds" / "shared.png")
     _touch(shared_root / "backgrounds" / "shadow.png")
+    _touch(story_root / "assets" / "backgrounds" / "legacy.txt")
+    _touch(shared_root / "sprites" / "legacy.txt")
     _touch(shared_root / "sfx" / "click.wav")
-    _touch(story_root / "assets" / "animations" / "sparkle" / "anim.yaml", "frames: [one.txt, two.txt]\n")
+    _touch(story_root / "assets" / "animations" / "sparkle" / "one.png")
+    _touch(story_root / "assets" / "animations" / "sparkle" / "two.png")
+    _touch(story_root / "assets" / "animations" / "sparkle" / "anim.yaml", "frames: [one.png, two.png]\n")
     source = StorySource(story_root, shared_root)
 
     records = source.discover_assets()
@@ -33,6 +37,7 @@ def test_asset_discovery_uses_story_first_shared_fallback_and_canonical_referenc
     assert by_reference[("backgrounds", "local.png")].source_kind == "Story"
     assert by_reference[("backgrounds", "shared.png")].source_kind == "Shared"
     assert by_reference[("backgrounds", "shadow.png")].source_kind == "Story"
+    assert not any(record.reference == "legacy.txt" for record in records)
     assert by_reference[("sfx", "click.wav")].reference == "click.wav"
     assert by_reference[("animation", "sparkle")].metadata["frame_count"] == 2
     assert source.authored_asset_reference(shared_root / "backgrounds" / "shared.png", "backgrounds") == "shared.png"

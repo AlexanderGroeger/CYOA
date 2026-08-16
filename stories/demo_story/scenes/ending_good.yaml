@@ -1,5 +1,4 @@
 id: ending_good
-background: treasure.txt
 ending: true
 ending_id: treasure_claimed
 text: |

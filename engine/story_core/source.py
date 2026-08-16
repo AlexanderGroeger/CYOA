@@ -31,12 +31,10 @@ class AssetCategorySpec:
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".gif"})
 AUDIO_EXTENSIONS = frozenset({".wav", ".ogg", ".mp3"})
 FONT_EXTENSIONS = frozenset({".ttf", ".otf"})
-TEXT_ART_EXTENSIONS = frozenset({".txt"})
-
 # Shared metadata for Core discovery and Designer filtering.
 ASSET_CATEGORY_SPECS = MappingProxyType({
-    "backgrounds": AssetCategorySpec("backgrounds", "Backgrounds", IMAGE_EXTENSIONS | TEXT_ART_EXTENSIONS),
-    "sprites": AssetCategorySpec("sprites", "Sprites", IMAGE_EXTENSIONS | TEXT_ART_EXTENSIONS),
+    "backgrounds": AssetCategorySpec("backgrounds", "Backgrounds", IMAGE_EXTENSIONS),
+    "sprites": AssetCategorySpec("sprites", "Sprites", IMAGE_EXTENSIONS),
     "items": AssetCategorySpec("items", "Item Images", IMAGE_EXTENSIONS),
     "music": AssetCategorySpec("music", "Music", AUDIO_EXTENSIONS),
     "sfx": AssetCategorySpec("sfx", "Sound Effects", AUDIO_EXTENSIONS),
@@ -211,6 +209,12 @@ class StorySource:
     def resolve_asset_path(self, category: str, filename: str) -> Path:
         """Resolve conventional category-relative assets, story first."""
 
+        category = _normalise_asset_category(category) or category
+        if not _asset_reference_supported(filename, category):
+            raise StorySourceError(
+                f"Asset '{filename}' is not a supported {category} asset",
+                code="unsupported_asset_type",
+            )
         story_path = self.story_root / "assets" / category / filename
         if story_path.exists():
             return story_path
@@ -243,6 +247,12 @@ class StorySource:
                 code="absolute_asset_path",
             )
         normalized = Path(str(candidate).lstrip("./"))
+        category = _normalise_asset_category(default_category) or default_category
+        if not _asset_reference_supported(normalized.name, category):
+            raise StorySourceError(
+                f"Asset '{filename}' is not a supported {category} asset",
+                code="unsupported_asset_type",
+            )
         for root in (self.story_root, self.shared_assets_root):
             direct = root / normalized
             if direct.exists():
@@ -461,6 +471,11 @@ def _is_supported_asset_file(path: Path, category: str) -> bool:
     return spec is not None and path.suffix.casefold() in spec.extensions
 
 
+def _asset_reference_supported(filename: str | Path, category: str) -> bool:
+    spec = ASSET_CATEGORY_SPECS.get(_normalise_asset_category(category) or category)
+    return spec is None or spec.semantic or Path(filename).suffix.casefold() in spec.extensions
+
+
 def is_supported_asset_file(path: str | Path, category: str | None) -> bool:
     """Return whether a physical file is consumable in ``category``."""
 
@@ -488,4 +503,12 @@ def _animation_frame_metadata(path: Path) -> Mapping[str, Any] | None:
         return None
     if not isinstance(data, Mapping) or not isinstance(data.get("frames"), list):
         return None
-    return {"frame_count": len(data["frames"])}
+    frames = data["frames"]
+    if any(
+        not isinstance(frame, str)
+        or Path(frame).suffix.casefold() not in IMAGE_EXTENSIONS
+        or not (path.parent / frame).is_file()
+        for frame in frames
+    ):
+        return None
+    return {"frame_count": len(frames)}

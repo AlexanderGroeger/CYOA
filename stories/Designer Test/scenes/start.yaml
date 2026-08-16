@@ -1,0 +1,27 @@
+id: start
+text: Gold rush river. The prospectors come out here everyday, but not Sunday.
+music: black_knife.ogg
+checkpoint: true
+exploration:
+  look_regions:
+  - id: test_region
+    rect:
+    - 206
+    - 210
+    - 171
+    - 129
+    interaction: inspect
+    event: test_region_event
+  look_events:
+    test_region_event:
+      actions:
+      - type: sound
+        file: heal.wav
+      - type: dialog
+        text: You got 40 HP!
+  dialogue_sequences:
+    dialogue:
+      text: ''
+  navigation:
+  - scene: start
+background: river.jpg

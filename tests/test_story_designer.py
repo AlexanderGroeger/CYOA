@@ -9,7 +9,7 @@ import pytest
 
 from engine.story_core import ContentKind, Diagnostic, DiagnosticSeverity, Diagnostics, load_story_project
 from story_core_fixture import write_fixture_story
-from story_designer.models import DefinitionSelection, ProjectSession, normalize_story_root
+from story_designer.models import DefinitionSelection, ProjectSession
 
 
 def test_project_session_open_selection_validation_and_close(tmp_path: Path) -> None:
@@ -46,11 +46,6 @@ def test_project_session_reload_replaces_project_and_drops_stale_selection(tmp_p
     assert session.project is not old_project
     assert session.selection is None
     assert "intro" not in session.project.scenes
-
-
-def test_story_root_normalization_accepts_manifest_file(tmp_path: Path) -> None:
-    story_root, _ = write_fixture_story(tmp_path)
-    assert normalize_story_root(story_root / "story.yaml") == story_root.resolve()
 
 
 def test_designer_session_and_core_imports_do_not_load_qt_or_pygame() -> None:

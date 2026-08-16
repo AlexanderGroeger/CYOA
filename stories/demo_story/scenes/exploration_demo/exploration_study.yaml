@@ -1,5 +1,4 @@
 id: exploration_study
-background: treasure.txt
 music: overworld.mp3
 
 # This scene is intentionally not connected to demo_story's default route.
@@ -85,9 +84,6 @@ exploration:
           dialog: unlock_archive
         - type: sound
           file: appear.wav
-        - type: animation
-          target: archive_lamp
-          animation: campfire
         - type: set_flag
           flag: archive_route_open
           value: true

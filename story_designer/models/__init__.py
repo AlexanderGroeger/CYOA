@@ -1,6 +1,6 @@
 """Application state models used by the Story Designer."""
 
-from .project_session import DefinitionSelection, ProjectSession, normalize_story_root
+from .project_session import DefinitionSelection, ProjectSession
 from .scene_graph import GraphEdgeKind, SceneGraphEdge, SceneGraphModel, SceneGraphNode, summarize_condition
 from .assets import AssetBrowserModel, AssetRecord
 from .scene_presentation import (
@@ -217,7 +217,6 @@ __all__ = [
     "capture_source_baseline",
     "changed_source_paths",
     "save_documents",
-    "normalize_story_root",
     "LookRegionPresentation",
     "NavigationEntrySelection",
     "NavigationPresentation",

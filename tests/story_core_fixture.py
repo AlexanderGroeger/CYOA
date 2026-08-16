@@ -7,6 +7,7 @@ one global namespace.
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 
@@ -20,6 +21,13 @@ def write_fixture_story(tmp_path: Path) -> tuple[Path, Path]:
         target = story_root / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(contents, encoding="utf-8")
+
+    def write_png(relative_path: str) -> None:
+        target = story_root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        ))
 
     write(
         "story.yaml",
@@ -110,11 +118,11 @@ def write_fixture_story(tmp_path: Path) -> tuple[Path, Path]:
     )
     write(
         "assets/animations/intro/anim.yaml",
-        "frames: [frame.txt]\n"
+        "frames: [frame.png]\n"
         "frame_delay_ms: 100\n"
         "loop: true\n"
         "future_animation_extension: {preserves: true}\n",
     )
-    write("assets/animations/intro/frame.txt", "frame")
+    write_png("assets/animations/intro/frame.png")
     shared_root.mkdir(parents=True, exist_ok=True)
     return story_root, shared_root

@@ -647,7 +647,7 @@ def default_schema_registry() -> SchemaRegistry:
                 _field("frame_delay_ms", integer(), default=300, minimum=1, ui_hint="spinbox"),
                 _field("loop", boolean(), default=True),
             ),
-            "Text/image frame animation envelope.",
+            "Image frame animation envelope.",
         ),
         aliases=("animations",),
     )

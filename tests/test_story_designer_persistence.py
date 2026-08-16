@@ -22,12 +22,13 @@ from story_designer.models import (
 )
 
 try:
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
     from shiboken6 import isValid
     from story_designer.main_window import MainWindow
 except ImportError:  # pragma: no cover - Core-only environments
     QApplication = None  # type: ignore[assignment]
     QMessageBox = None  # type: ignore[assignment]
+    QFileDialog = None  # type: ignore[assignment]
     isValid = None  # type: ignore[assignment]
     MainWindow = None  # type: ignore[assignment]
 
@@ -138,6 +139,40 @@ def test_atomic_write_failure_keeps_original_and_dirty_state(tmp_path: Path, mon
         session.save()
     assert source.read_bytes() == original
     assert session.is_dirty
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_open_story_uses_directory_selection_only(qapp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    story_root, _ = write_fixture_story(tmp_path)
+    window = MainWindow()
+    selected: list[Path] = []
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda _parent, title, _initial: (selected.append(story_root) or str(story_root)))
+    monkeypatch.setattr(window, "open_story_path", lambda path: selected.append(Path(path)) or True)
+
+    window.open_story()
+
+    assert selected == [story_root, story_root]
+    window.close()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_recent_story_manifest_paths_are_migrated_to_directories(qapp, tmp_path: Path) -> None:
+    story_root, _ = write_fixture_story(tmp_path)
+    window = MainWindow()
+    values = {"recentStories": [str(story_root / "story.yaml")]}
+
+    class MemorySettings:
+        def value(self, key, default=None):
+            return values.get(key, default)
+
+        def setValue(self, key, value):
+            values[key] = value
+
+    window.settings = MemorySettings()
+
+    assert window._recent_paths() == [str(story_root)]
+    assert values["recentStories"] == [str(story_root)]
+    window.close()
 
 
 @pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")

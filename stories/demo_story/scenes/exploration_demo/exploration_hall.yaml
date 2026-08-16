@@ -1,5 +1,5 @@
 id: exploration_hall
-background: forest.txt
+background: forest.png
 music: overworld.mp3
 
 # A deliberately small navigation hub for the isolated exploration sample.

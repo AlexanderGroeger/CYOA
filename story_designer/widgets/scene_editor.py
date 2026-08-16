@@ -127,7 +127,6 @@ class SceneGraphicsItem(QGraphicsRectItem):
         *,
         ref: SceneElementSelection | None = None,
         pixmap: QPixmap | None = None,
-        text: str | None = None,
         label: str | None = None,
         region: bool = False,
         missing: str | None = None,
@@ -139,7 +138,6 @@ class SceneGraphicsItem(QGraphicsRectItem):
         super().__init__(0, 0, max(1, width), max(1, height), parent)
         self.ref = ref
         self.pixmap = pixmap
-        self.text_art = text
         self.label = label
         self.region = region
         self.missing = missing
@@ -180,11 +178,6 @@ class SceneGraphicsItem(QGraphicsRectItem):
                 painter.drawRect(bounds)
             elif self.pixmap is not None and not self.pixmap.isNull():
                 painter.drawPixmap(bounds, self.pixmap, QRectF(self.pixmap.rect()))
-            elif self.text_art:
-                painter.fillRect(bounds, QColor(40, 45, 65, 230))
-                painter.setPen(QColor("#e8e9f0"))
-                painter.setFont(QFont("monospace", 7))
-                painter.drawText(bounds.adjusted(3, 3, -3, -3), Qt.AlignmentFlag.AlignCenter, self.text_art)
             else:
                 painter.fillRect(bounds, QColor(190, 70, 70, 120) if self.missing else QColor(110, 110, 125, 110))
                 pen = QPen(QColor("#ff8b8b") if self.missing else QColor("#c3c4cf"), 1)
@@ -429,8 +422,7 @@ class SceneEditorWidget(QWidget):
         if presentation.unsupported_animation:
             animation_item = SceneGraphicsItem(
                 (6, 6, min(width - 12, 220), 22),
-                text=f"[ animated scene: {presentation.unsupported_animation} ]",
-                label="Unsupported animation preview",
+                label=f"Animation preview unavailable: {presentation.unsupported_animation}",
             )
             animation_item.setZValue(30000)
             self.scene.addItem(animation_item)
@@ -456,11 +448,10 @@ class SceneEditorWidget(QWidget):
     def _add_background(self, presentation: ScenePresentation) -> None:
         width, height = presentation.logical_size
         pixmap = _load_pixmap(presentation.background_path, (width, height))
-        text = _load_text(presentation.background_path)
         missing = None
-        if presentation.background and (presentation.background_path is None or (pixmap is None and text is None)):
+        if presentation.background and (presentation.background_path is None or pixmap is None):
             missing = presentation.background_error or f"Unable to load background: {presentation.background}"
-        item = SceneGraphicsItem((0, 0, width, height), pixmap=pixmap, text=text, missing=missing,
+        item = SceneGraphicsItem((0, 0, width, height), pixmap=pixmap, missing=missing,
                                  label="Scene background")
         item.setBrush(QBrush(QColor("#303341")))
         item.setZValue(-10000)
@@ -469,11 +460,10 @@ class SceneEditorWidget(QWidget):
     def _add_object(self, scene_id: str, obj: SceneObjectPresentation) -> SceneGraphicsItem:
         width, height = obj.size or _asset_size(obj.sprite_path, default=(48, 36))
         pixmap = _load_pixmap(obj.sprite_path, (width, height) if obj.size else None)
-        text = _load_text(obj.sprite_path) if pixmap is None else None
         missing = obj.asset_error if obj.sprite else "Object has no sprite asset"
-        if obj.sprite and obj.sprite_path is not None and pixmap is None and text is None:
+        if obj.sprite and pixmap is None:
             missing = missing or f"Unable to load sprite: {obj.sprite}"
-        elif obj.sprite_path is not None and (pixmap is not None or text is not None):
+        elif obj.sprite_path is not None and pixmap is not None:
             missing = None
         label = obj.id
         if obj.conditional:
@@ -484,7 +474,6 @@ class SceneEditorWidget(QWidget):
             (obj.position[0], obj.position[1], width, height),
             ref=SceneElementSelection(scene_id, "object", obj.id),
             pixmap=pixmap,
-            text=text,
             label=label,
             missing=missing,
             editable=True,
@@ -497,17 +486,15 @@ class SceneEditorWidget(QWidget):
     def _add_legacy_sprite(self, presentation: ScenePresentation) -> None:
         width, height = _asset_size(presentation.legacy_sprite_path, default=(64, 48))
         pixmap = _load_pixmap(presentation.legacy_sprite_path, None)
-        text = _load_text(presentation.legacy_sprite_path) if pixmap is None else None
         missing = presentation.legacy_sprite_error
-        if presentation.legacy_sprite and presentation.legacy_sprite_path is not None and pixmap is None and text is None:
+        if presentation.legacy_sprite and pixmap is None:
             missing = missing or f"Unable to load sprite: {presentation.legacy_sprite}"
-        elif presentation.legacy_sprite_path is not None and (pixmap is not None or text is not None):
+        elif presentation.legacy_sprite_path is not None and pixmap is not None:
             missing = None
         item = SceneGraphicsItem(
             (presentation.legacy_sprite_position[0], presentation.legacy_sprite_position[1], width, height),
             ref=SceneElementSelection(presentation.scene_id, "sprite", "scene_sprite"),
             pixmap=pixmap,
-            text=text,
             label="scene sprite",
             missing=missing or "Scene has no loadable sprite",
             editable=False,
@@ -964,15 +951,6 @@ def _load_pixmap(path: Path | None, size: tuple[int, int] | None) -> QPixmap | N
         pixmap = pixmap.scaled(max(1, size[0]), max(1, size[1]), Qt.AspectRatioMode.IgnoreAspectRatio,
                                Qt.TransformationMode.SmoothTransformation)
     return pixmap
-
-
-def _load_text(path: Path | None) -> str | None:
-    if path is None or path.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".gif"}:
-        return None
-    try:
-        return path.read_text(encoding="utf-8")[:4000]
-    except (OSError, UnicodeDecodeError):
-        return None
 
 
 def _asset_size(path: Path | None, *, default: tuple[int, int]) -> tuple[int, int]:

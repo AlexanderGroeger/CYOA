@@ -60,7 +60,7 @@ class Renderer:
         self._rotated_images: dict[tuple[Path, tuple[int, int], int], Any] = {}
         self._fonts: dict[int, Any] = {}
         self._text: dict[tuple[str, int, tuple[int, int, int]], Any] = {}
-        self._animations: dict[str, tuple[list[list[str]], int, bool]] = {}
+        self._animations: dict[str, tuple[list[Path], int, bool]] = {}
         self._animation_indices: dict[str, int] = {}
         self.dirty = True
         pygame.display.set_caption("CYOA Engine")
@@ -219,36 +219,25 @@ class Renderer:
             line = shortened.rstrip() + "..."
         self.surface.blit(self._text_surface(line, size, color), (rect.x, rect.y + (rect.height - font.get_height()) // 2))
 
-    def _draw_text_art(self, category: str, filename: str, bounds: Any, surface: Any | None = None) -> None:
-        target = self.surface if surface is None else surface
-        lines = self.assets.load_text_asset(category, filename).splitlines()
-        if not lines:
-            return
-        font = self._font(10)
-        line_h, width = font.get_linesize(), max(font.size(line)[0] for line in lines)
-        x, y = bounds.x + (bounds.width - width) // 2, bounds.y + max(0, (bounds.height - line_h * len(lines)) // 2)
-        for line in lines:
-            target.blit(self._text_surface(line, font.get_height(), (230, 230, 230)), (x, y))
-            y += line_h
-
-    def _animation_frame(self, name: str) -> list[str]:
+    def _animation_frame(self, name: str) -> Path | None:
         """Return the current cached animation frame, loading its files once."""
         if name not in self._animations:
             data = self.assets.load_animation(name)
             directory = self.assets.animation_dir(name)
-            frames: list[list[str]] = []
+            frames: list[Path] = []
             for filename in data.get("frames", []):
                 path = directory / filename
-                if self.assets.is_image_asset(filename):
-                    # Image animation frames use the normal image cache when
-                    # drawn; text frames are cached here as immutable lines.
-                    frames.append([str(path)])
-                else:
-                    frames.append(path.read_text(encoding="utf-8").splitlines())
+                if not self.assets.is_image_asset(filename):
+                    raise AssetNotFoundError(
+                        f"Animation frame '{filename}' is not a supported image asset"
+                    )
+                if not path.is_file():
+                    raise AssetNotFoundError(f"Animation frame not found: {path}")
+                frames.append(path)
             self._animations[name] = (frames, max(1, int(data.get("frame_delay_ms", 300))), bool(data.get("loop", True)))
         frames, delay, loop = self._animations[name]
         if not frames:
-            return []
+            return None
         index = self.pygame.time.get_ticks() // delay
         index = index % len(frames) if loop else min(index, len(frames) - 1)
         self._animation_indices[name] = index
@@ -272,15 +261,15 @@ class Renderer:
             changed |= before != self._animation_indices.get(name)
         return changed
 
-    def _draw_lines(self, lines: list[str], bounds: Any) -> None:
-        if not lines:
+    def _draw_animation_frame(self, name: str, bounds: Any, surface: Any | None = None) -> None:
+        path = self._animation_frame(name)
+        if path is None:
             return
-        font = self._font(10)
-        line_h, width = font.get_linesize(), max(font.size(line)[0] for line in lines)
-        x, y = bounds.x + (bounds.width - width) // 2, bounds.y + max(0, (bounds.height - line_h * len(lines)) // 2)
-        for line in lines:
-            self.surface.blit(self._text_surface(line, font.get_height(), (255, 195, 110)), (x, y))
-            y += line_h
+        if path not in self._images:
+            self._images[path] = self.pygame.image.load(str(path)).convert_alpha()
+        image = self._fit_image(path, self._images[path], bounds.size)
+        target = self.surface if surface is None else surface
+        target.blit(image, image.get_rect(center=bounds.center))
 
     def _draw_health_bar(self, rect: Any, ratio: float, color: tuple[int, int, int], label: str,
                          alpha: int = 255, text_color: tuple[int, int, int] = (245, 245, 255),
@@ -350,8 +339,7 @@ class Renderer:
                 rect.move_ip(x_factor * magnitude, y_factor * magnitude)
             (self.surface if surface is None else surface).blit(fitted, rect)
             return rect
-        self._draw_text_art("sprites", sprite, bounds, surface)
-        return bounds
+        return None
 
     def _qte_point(self, canvas: Any, point: tuple[float, float]) -> tuple[int, int]:
         return canvas.x + round(canvas.width * point[0]), canvas.y + round(canvas.height * point[1])
@@ -1079,11 +1067,8 @@ class Renderer:
         self.surface.fill((12, 12, 28))
         w, h = self.config.width, self.config.height
         if battle.background:
-            if self.assets.is_image_asset(battle.background):
-                path, image = self._image("backgrounds", battle.background)
-                self.surface.blit(self._scaled_image(path, image, (w, h)), (0, 0))
-            else:
-                self._draw_text_art("backgrounds", battle.background, pg.Rect(0, 0, w, h))
+            path, image = self._image("backgrounds", battle.background)
+            self.surface.blit(self._scaled_image(path, image, (w, h)), (0, 0))
 
         victory = getattr(battle, "victory_animation", None)
         enemy_ratio = battle.animations.displayed_health.get("enemy", battle.enemy.hp / battle.enemy.max_hp)
@@ -1249,11 +1234,8 @@ class Renderer:
         art_area = pg.Rect(0, 0, self.config.width, self.config.height)
         background = scene.get("background")
         if isinstance(background, str) and background:
-            if self.assets.is_image_asset(background):
-                path, image = self._image_reference("backgrounds", background)
-                self.surface.blit(self._scaled_image(path, image, art_area.size), art_area.topleft)
-            else:
-                self._draw_text_art("backgrounds", background, art_area)
+            path, image = self._image_reference("backgrounds", background)
+            self.surface.blit(self._scaled_image(path, image, art_area.size), art_area.topleft)
 
         overrides = sprite_overrides or {}
         animations = object_animations or {}
@@ -1273,38 +1255,26 @@ class Renderer:
             size = obj.get("size")
             bounds = pg.Rect(x, y, 1, 1)
             if isinstance(sprite, str) and sprite:
-                if self.assets.is_image_asset(sprite):
-                    path, image = self._image_reference("sprites", sprite)
-                    if isinstance(size, (list, tuple)) and len(size) == 2:
-                        image = self._scaled_image(path, image, (max(1, int(size[0])), max(1, int(size[1]))))
-                    self.surface.blit(image, (x, y))
-                    bounds.size = image.get_size()
-                else:
-                    # Text-art objects retain the compact legacy style.  A
-                    # configured size gives them a stable local art region.
-                    if isinstance(size, (list, tuple)) and len(size) == 2:
-                        bounds.size = (max(1, int(size[0])), max(1, int(size[1])))
-                    else:
-                        bounds.size = (80, 60)
-                    self._draw_text_art("sprites", sprite, bounds)
+                path, image = self._image_reference("sprites", sprite)
+                if isinstance(size, (list, tuple)) and len(size) == 2:
+                    image = self._scaled_image(path, image, (max(1, int(size[0])), max(1, int(size[1]))))
+                self.surface.blit(image, (x, y))
+                bounds.size = image.get_size()
             elif isinstance(size, (list, tuple)) and len(size) == 2:
                 bounds.size = (max(1, int(size[0])), max(1, int(size[1])))
 
             animation = animations.get(object_id, obj.get("animation"))
             if isinstance(animation, str) and animation:
-                self._draw_lines(self._animation_frame(animation), bounds)
+                self._draw_animation_frame(animation, bounds)
 
         # The legacy protagonist/character sprite draws after set dressing.
         sprite = scene.get("sprite")
         if isinstance(sprite, str) and sprite:
-            if self.assets.is_image_asset(sprite):
-                path, image = self._image_reference("sprites", sprite)
-                pos = scene.get("sprite_position", [0, 0])
-                self.surface.blit(image, (art_area.x + int(pos[0]), art_area.y + int(pos[1])))
-            else:
-                self._draw_text_art("sprites", sprite, art_area)
+            path, image = self._image_reference("sprites", sprite)
+            pos = scene.get("sprite_position", [0, 0])
+            self.surface.blit(image, (art_area.x + int(pos[0]), art_area.y + int(pos[1])))
         if scene.get("animation"):
-            self._draw_lines(self._animation_frame(scene["animation"]), art_area)
+            self._draw_animation_frame(scene["animation"], art_area)
 
     def _draw_exploration_menu(self, entries: list[str], selected: int, rect: Any, *, horizontal: bool = False,
                                title: str | None = None, page_start: int = 0) -> None:
@@ -1567,20 +1537,15 @@ class Renderer:
         art_area = pg.Rect(0, 0, w, h)
         background = scene.get("background")
         if background:
-            if self.assets.is_image_asset(background):
-                path, image = self._image("backgrounds", background)
-                self.surface.blit(self._scaled_image(path, image, art_area.size), art_area.topleft)
-            else:
-                self._draw_text_art("backgrounds", background, art_area)
+            path, image = self._image("backgrounds", background)
+            self.surface.blit(self._scaled_image(path, image, art_area.size), art_area.topleft)
         sprite = scene.get("sprite")
-        if sprite and self.assets.is_image_asset(sprite):
+        if sprite:
             path, image = self._image("sprites", sprite)
             pos = scene.get("sprite_position", [0, 0])
             self.surface.blit(image, (art_area.x + int(pos[0]), art_area.y + int(pos[1])))
-        elif sprite:
-            self._draw_text_art("sprites", sprite, art_area)
         if scene.get("animation"):
-            self._draw_lines(self._animation_frame(scene["animation"]), art_area)
+            self._draw_animation_frame(scene["animation"], art_area)
 
         panel = self._dialogue_rect()
         self._draw_transparent_box(panel)
