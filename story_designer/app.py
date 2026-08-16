@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from PySide6.QtWidgets import QApplication
 
 from .main_window import MainWindow
+from .wheel_behavior import install_input_wheel_guard
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -16,6 +17,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     application = QApplication(list(argv) if argv is not None else sys.argv)
     application.setApplicationName("Story Designer")
     application.setOrganizationName("CYOA")
+    install_input_wheel_guard(application)
     window = MainWindow()
     window.show()
     return application.exec()
