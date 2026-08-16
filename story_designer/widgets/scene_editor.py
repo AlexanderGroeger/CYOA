@@ -168,7 +168,9 @@ class SceneGraphicsItem(QGraphicsRectItem):
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.save()
         try:
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            # Keep pixel art and other authored artwork crisp when the scene
+            # view scales it to the logical scene rectangle.
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
             bounds = self.rect()
             if self.region:
                 painter.fillRect(bounds, QColor(70, 180, 220, 45))
@@ -949,7 +951,7 @@ def _load_pixmap(path: Path | None, size: tuple[int, int] | None) -> QPixmap | N
         return None
     if size is not None:
         pixmap = pixmap.scaled(max(1, size[0]), max(1, size[1]), Qt.AspectRatioMode.IgnoreAspectRatio,
-                               Qt.TransformationMode.SmoothTransformation)
+                               Qt.TransformationMode.FastTransformation)
     return pixmap
 
 
