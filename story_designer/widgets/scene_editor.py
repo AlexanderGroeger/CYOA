@@ -361,6 +361,10 @@ class SceneEditorWidget(QWidget):
         self.scene_bounds_warning: str | None = None
         self.scene = QGraphicsScene(self)
         self.navigation_panel = NavigationPanel(session, self)
+        # Kept as a compatibility handle for older integrations.  Navigation
+        # editing belongs to Scene Graph and is deliberately not part of the
+        # visible Scenes tool layout.
+        self.navigation_panel.hide()
         self.navigation_panel.navigation_changed.connect(self.navigation_changed)
         self.navigation_panel.open_destination_scene.connect(self.open_destination_scene)
         self.view = SceneCanvasView(self)
@@ -425,7 +429,7 @@ class SceneEditorWidget(QWidget):
         layout.addLayout(toolbar)
         self.navigation_summary = QLabel("Move Destinations: -")
         self.navigation_summary.setStyleSheet("color: #64748b;")
-        layout.addWidget(self.navigation_summary)
+        self.navigation_summary.hide()
         self.scene_warning = QLabel()
         self.scene_warning.setStyleSheet("color: #f59e0b;")
         self.scene_warning.setWordWrap(True)
@@ -433,7 +437,6 @@ class SceneEditorWidget(QWidget):
         layout.addWidget(self.scene_warning)
         content = QHBoxLayout()
         content.addWidget(self.view, 1)
-        content.addWidget(self.navigation_panel)
         layout.addLayout(content, 1)
         self._zoom = 1.0
         self._fit_mode = True

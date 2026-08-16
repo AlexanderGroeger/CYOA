@@ -413,6 +413,17 @@ class InspectorWidget(QWidget):
         layout.addWidget(self.summary)
         self.clear()
 
+    def set_tool_context_mode(self, enabled: bool = True) -> None:
+        """Present the mature context pages as one editor surface.
+
+        The pages remain stable for lifetime safety and compatibility, but the
+        tab strip is hidden when the Inspector is owned by a ToolShell.  Page
+        replacement is driven by scene/object/region selection.
+        """
+
+        self.context_tabs.tabBar().setVisible(not enabled)
+        self.setProperty("toolContextEditor", bool(enabled))
+
     @staticmethod
     def _metadata_label() -> QLabel:
         label = QLabel("—")

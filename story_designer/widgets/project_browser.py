@@ -83,17 +83,30 @@ class ProjectBrowser(QWidget):
         ContentKind.ANIMATION: "assets/animations",
     }
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        allowed_kinds: Iterable[ContentKind | str] | None = None,
+        title: str = "Project",
+        search_placeholder: str | None = None,
+    ) -> None:
         super().__init__(parent)
+        self.allowed_kinds = (
+            {ContentKind.coerce(kind) for kind in allowed_kinds}
+            if allowed_kinds is not None
+            else None
+        )
+        self._title = str(title)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search project...")
+        self.search.setPlaceholderText(search_placeholder or f"Search {self._title.casefold()}...")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._on_search_changed)
         self.search_edit = self.search
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(1)
-        self.tree.setHeaderLabels(["Project"])
+        self.tree.setHeaderLabels([self._title])
         self.tree.setRootIsDecorated(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
@@ -106,6 +119,12 @@ class ProjectBrowser(QWidget):
         layout.addWidget(self.tree)
 
         self._project: StoryProject | None = None
+
+    def set_allowed_kinds(self, kinds: Iterable[ContentKind | str] | None) -> None:
+        """Limit this browser to the resource kinds owned by one tool."""
+
+        self.allowed_kinds = None if kinds is None else {ContentKind.coerce(kind) for kind in kinds}
+        self.set_project(self._project)
 
     @property
     def project(self) -> StoryProject | None:
@@ -135,6 +154,8 @@ class ProjectBrowser(QWidget):
         assert project.index is not None
 
         for kind, label in self._CATEGORIES:
+            if self.allowed_kinds is not None and kind not in self.allowed_kinds:
+                continue
             entries = tuple(self._entries_for(project, kind))
             if not entries:
                 continue

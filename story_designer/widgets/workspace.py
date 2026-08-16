@@ -1,24 +1,107 @@
-"""Central workspace placeholder designed for future editor tabs."""
+"""Tool-centric central workspace for the Story Designer."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from engine.story_core import ContentKind, Diagnostics, StoryProject
 
-from ..models import DefinitionSelection, ProjectSession
-from .scene_editor import SceneEditorWidget
-from .dialogue_editor import DialogueEditorWidget
-from .scene_graph import SceneGraphWidget
+from ..models import DefinitionSelection, ProjectSession, SceneGraphEdge
+from .asset_browser import AssetBrowserWidget
 from .battle_editor import BattleEditorWidget
 from .combat_move_editor import CombatMoveEditorWidget
+from .dialogue_editor import DialogueEditorWidget
+from .inspector import InspectorWidget
+from .navigation_panel import NavigationPanel
+from .project_browser import ProjectBrowser
+from .scene_editor import SceneEditorWidget
+from .scene_graph import SceneGraphWidget
+
+
+class ToolShell(QWidget):
+    """Stable navigator/editor/context layout for one authoring tool."""
+
+    def __init__(
+        self,
+        navigator: QWidget,
+        editor: QWidget,
+        context: QWidget,
+        *,
+        object_name: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.navigator = navigator
+        self.editor = editor
+        self.context = context
+        self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.splitter.setObjectName(f"{object_name}Splitter")
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(navigator)
+        self.splitter.addWidget(editor)
+        self.splitter.addWidget(context)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(2, 0)
+        self.splitter.setSizes([240, 700, 340])
+        navigator.setMinimumWidth(180)
+        context.setMinimumWidth(260)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.splitter)
+
+
+class ContextSummary(QWidget):
+    """Singular context surface for editors with detail UI of their own."""
+
+    def __init__(self, title: str, value: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.title = QLabel(title)
+        self.title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        self.value = QPlainTextEdit()
+        self.value.setReadOnly(True)
+        self.value.setPlaceholderText("Select an item to inspect its context.")
+        if value:
+            self.value.setPlainText(value)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.title)
+        layout.addWidget(self.value, 1)
+
+    def set_context(self, title: str, value: str = "") -> None:
+        self.title.setText(title)
+        self.value.setPlainText(value)
+
+
+class WorkspaceTabs(QTabWidget):
+    """Tab widget with a backwards-compatible editor identity query.
+
+    Existing extensions used ``currentWidget()`` to reach the center editor.
+    The visible page is still the complete ToolShell; ``currentPage()`` is the
+    unambiguous shell-oriented API used by the new workspace code.
+    """
+
+    def currentPage(self) -> QWidget | None:  # noqa: N802 - Qt-style API
+        return super().currentWidget()
+
+    def currentWidget(self) -> QWidget | None:  # noqa: N802 - compatibility API
+        page = super().currentWidget()
+        return getattr(page, "editor", page)
 
 
 class WorkspaceWidget(QWidget):
-    """Central overview plus the graphical editor for authored scenes."""
+    """Top-level focused authoring tools."""
 
     scene_element_selected = Signal(object)
     dialogue_entry_selected = Signal(object)
@@ -33,11 +116,16 @@ class WorkspaceWidget(QWidget):
     combat_move_changed = Signal(object)
     new_story_requested = Signal()
     open_story_requested = Signal()
+    scene_navigator_selected = Signal(object)
+    graph_navigator_selected = Signal(object)
 
     def __init__(self, session: ProjectSession | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.session = session
-        self.tabs = QTabWidget()
+        self.tabs = WorkspaceTabs()
+        self.tabs.setDocumentMode(True)
+
+        self.overview_browser = ProjectBrowser(title="Project", search_placeholder="Search project...")
         self.overview_title = QLabel("Welcome to Story Designer")
         self.overview_title.setStyleSheet("font-size: 18px; font-weight: bold;")
         self.overview = QPlainTextEdit()
@@ -50,35 +138,79 @@ class WorkspaceWidget(QWidget):
         welcome_buttons.addWidget(self.welcome_new_button)
         welcome_buttons.addWidget(self.welcome_open_button)
         welcome_buttons.addStretch(1)
-        page = QWidget()
-        page_layout = QVBoxLayout(page)
-        page_layout.addWidget(self.overview_title)
-        page_layout.addLayout(welcome_buttons)
-        page_layout.addWidget(self.overview)
-        self.tabs.addTab(page, "Overview")
+        overview_detail = QWidget()
+        overview_layout = QVBoxLayout(overview_detail)
+        overview_layout.addWidget(self.overview_title)
+        overview_layout.addLayout(welcome_buttons)
+        overview_layout.addWidget(self.overview)
+        overview_shell = ToolShell(self.overview_browser, overview_detail, ContextSummary("Project"), object_name="project")
+        self.tabs.addTab(overview_shell, "Project")
+
+        scene_kinds = {ContentKind.SCENE}
+        self.scene_navigator = ProjectBrowser(title="Scenes", allowed_kinds=scene_kinds, search_placeholder="Search scenes...")
         self.scene_editor = SceneEditorWidget(session)
-        self.tabs.addTab(self.scene_editor, "Scene")
+        self.inspector = InspectorWidget(session)
+        self.inspector.set_tool_context_mode(True)
+        self.scene_shell = ToolShell(self.scene_navigator, self.scene_editor, self.inspector, object_name="scenes")
+        self.tabs.addTab(self.scene_shell, "Scenes")
+        self.scene_navigator.selection_changed.connect(self.scene_navigator_selected)
         self.scene_editor.element_selected.connect(self.scene_element_selected)
+
+        self.dialogue_navigator = ProjectBrowser(title="Scenes", allowed_kinds=scene_kinds, search_placeholder="Search dialogue scenes...")
         self.dialogue_editor = DialogueEditorWidget(session)
-        self.tabs.addTab(self.dialogue_editor, "Dialogue")
-        self.dialogue_editor.entry_selected.connect(self.dialogue_entry_selected)
+        self.dialogue_context = ContextSummary("Dialogue Context")
+        self.dialogue_shell = ToolShell(self.dialogue_navigator, self.dialogue_editor, self.dialogue_context, object_name="dialogue")
+        self.tabs.addTab(self.dialogue_shell, "Dialogue")
+        self.dialogue_navigator.selection_changed.connect(self._dialogue_scene_selected)
+        self.dialogue_editor.entry_selected.connect(self._on_dialogue_entry)
         self.dialogue_editor.dialogue_changed.connect(self.dialogue_changed)
         self.scene_editor.open_dialogue_sequence.connect(self.open_dialogue_sequence)
+
+        self.graph_navigator = ProjectBrowser(title="Scenes", allowed_kinds=scene_kinds, search_placeholder="Search graph scenes...")
         self.scene_graph = SceneGraphWidget(session)
-        self.tabs.addTab(self.scene_graph, "Scene Graph")
+        self.graph_navigation = NavigationPanel(session)
+        self.graph_shell = ToolShell(self.graph_navigator, self.scene_graph, self.graph_navigation, object_name="sceneGraph")
+        self.tabs.addTab(self.graph_shell, "Scene Graph")
+        self.graph_navigator.selection_changed.connect(self.graph_navigator_selected)
         self.scene_graph.scene_selected.connect(self.graph_scene_selected)
         self.scene_graph.scene_open_requested.connect(self.graph_scene_open_requested)
         self.scene_graph.open_navigation_entry.connect(self.graph_open_navigation)
+
+        self.battle_navigator = ProjectBrowser(title="Battles", allowed_kinds={ContentKind.BATTLE}, search_placeholder="Search battles...")
         self.battle_editor = BattleEditorWidget(session)
-        self.tabs.addTab(self.battle_editor, "Battle")
+        self.battle_context = ContextSummary("Battle Context")
+        self.battle_shell = ToolShell(self.battle_navigator, self.battle_editor, self.battle_context, object_name="battles")
+        self.tabs.addTab(self.battle_shell, "Battles")
+        self.battle_navigator.selection_changed.connect(self._battle_selected)
         self.battle_editor.section_selected.connect(self.battle_section_selected)
         self.battle_editor.element_selected.connect(self.battle_element_selected)
         self.battle_editor.changed.connect(self.battle_changed)
+
+        self.move_navigator = ProjectBrowser(title="Combat Moves", allowed_kinds={ContentKind.MOVE}, search_placeholder="Search combat moves...")
         self.combat_move_editor = CombatMoveEditorWidget(session)
-        self.tabs.addTab(self.combat_move_editor, "Combat Move")
+        self.combat_move_context = ContextSummary("Combat Move Context")
+        self.combat_move_shell = ToolShell(self.move_navigator, self.combat_move_editor, self.combat_move_context, object_name="combatMoves")
+        self.tabs.addTab(self.combat_move_shell, "Combat Moves")
+        self.move_navigator.selection_changed.connect(self._move_selected)
         self.combat_move_editor.section_selected.connect(self.combat_move_section_selected)
         self.combat_move_editor.changed.connect(self.combat_move_changed)
+
+        self.asset_browser = AssetBrowserWidget()
+        asset_nav = ContextSummary("Asset Filters", "Use the asset browser search and type filters to narrow this tool.")
+        self.asset_shell = ToolShell(asset_nav, self.asset_browser, ContextSummary("Asset Preview"), object_name="assets")
+        self.tabs.addTab(self.asset_shell, "Assets")
+
+        self._shells = {
+            "project": overview_shell,
+            "scenes": self.scene_shell,
+            "dialogue": self.dialogue_shell,
+            "sceneGraph": self.graph_shell,
+            "battles": self.battle_shell,
+            "combatMoves": self.combat_move_shell,
+            "assets": self.asset_shell,
+        }
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.tabs)
         self.clear()
 
@@ -88,30 +220,32 @@ class WorkspaceWidget(QWidget):
         self.welcome_new_button.setVisible(True)
         self.welcome_open_button.setVisible(True)
         self.tabs.setCurrentIndex(0)
+        for browser in (self.overview_browser, self.scene_navigator, self.dialogue_navigator, self.graph_navigator, self.battle_navigator, self.move_navigator):
+            browser.clear_project()
         self.scene_editor.clear()
         self.dialogue_editor.clear()
         self.scene_graph.clear()
+        self.graph_navigation.clear()
         self.battle_editor.clear()
         self.combat_move_editor.clear()
+        self.inspector.clear()
 
-    def set_state(
-        self,
-        project: StoryProject | None,
-        selection: DefinitionSelection | None,
-        definition: Any | None,
-        diagnostics: Diagnostics,
-    ) -> None:
+    def set_state(self, project: StoryProject | None, selection: DefinitionSelection | None, definition: Any | None, diagnostics: Diagnostics) -> None:
         if project is None:
             self.clear()
             return
         self.welcome_new_button.setVisible(False)
         self.welcome_open_button.setVisible(False)
+        self.overview_browser.set_project(project)
+        for browser in (self.scene_navigator, self.dialogue_navigator, self.graph_navigator, self.battle_navigator, self.move_navigator):
+            browser.set_project(project)
         self.scene_graph.set_state(project, selection, definition, diagnostics)
         self.battle_editor.set_state(project, selection, definition, diagnostics)
         self.combat_move_editor.set_state(project, selection, definition, diagnostics)
         if selection is None or definition is None:
             self.overview_title.setText(project.manifest.title or project.manifest.id)
             self.overview.setPlainText(_project_summary(project, diagnostics))
+            self.inspector.set_selection(project, selection, definition, diagnostics)
             return
         if selection.kind is ContentKind.SCENE:
             mapping = self.session.working_mapping(selection) if self.session is not None else None
@@ -119,54 +253,96 @@ class WorkspaceWidget(QWidget):
                 mapping = definition.to_mapping()
             self.scene_editor.set_scene(project, selection.id, mapping)
             self.dialogue_editor.set_scene(project, selection.id, mapping)
-            if self.tabs.currentWidget() is self.scene_graph:
+            self.graph_navigation.set_scene(project, selection.id, mapping)
+            self.inspector.set_selection(project, selection, definition, diagnostics)
+            self.scene_navigator.select(selection)
+            self.dialogue_navigator.select(selection)
+            self.graph_navigator.select(selection)
+            if self.tabs.currentPage() is self.graph_shell:
                 self.scene_graph.select_scene(selection.id, emit=False)
             else:
-                self.tabs.setCurrentWidget(self.scene_editor)
+                self.open_scene_editor()
             return
+        self.inspector.set_selection(project, selection, definition, diagnostics)
         if selection.kind is ContentKind.BATTLE:
             self.open_battle_editor()
-            self.dialogue_editor.clear()
-            return
-        if selection.kind is ContentKind.MOVE:
+        elif selection.kind is ContentKind.MOVE:
             self.open_combat_move_editor()
-            self.dialogue_editor.clear()
-            return
-        self.tabs.setCurrentIndex(0)
-        self.dialogue_editor.clear()
-        self.overview_title.setText(f"{selection.kind.value.replace('_', ' ').title()}: {selection.id}")
-        authored = getattr(definition, "authored", definition)
-        self.overview.setPlainText(
-            f"Source: {getattr(definition, 'source', selection.source)}\n\n"
-            f"Authored fields: {len(authored) if hasattr(authored, '__len__') else 'n/a'}\n\n"
-            "Edit supported properties in the Inspector. Changes remain in memory until you save the story."
-        )
+        else:
+            self.tabs.setCurrentIndex(0)
+            self.overview_title.setText(f"{selection.kind.value.replace('_', ' ').title()}: {selection.id}")
+            authored = getattr(definition, "authored", definition)
+            self.overview.setPlainText(
+                f"Source: {getattr(definition, 'source', selection.source)}\n\n"
+                f"Authored fields: {len(authored) if hasattr(authored, '__len__') else 'n/a'}\n\n"
+                "Edit supported properties in the active context editor. Changes remain in memory until you save the story."
+            )
 
     def refresh_value_dependencies(self) -> None:
-        """Update value-dependent visuals without resetting an editor tab."""
-
         self.scene_editor.refresh_value_dependencies()
 
     def open_dialogue_sequence(self, sequence_id: str) -> None:
-        """Switch from a scene element to its local dialogue sequence."""
-
         if self.dialogue_editor.select_source(f"sequence:{sequence_id}"):
-            self.tabs.setCurrentWidget(self.dialogue_editor)
+            self.tabs.setCurrentWidget(self.dialogue_shell)
 
     def open_scene_editor(self) -> None:
-        """Show the existing scene editor for the current scene selection."""
-        self.tabs.setCurrentWidget(self.scene_editor)
+        self.tabs.setCurrentWidget(self.scene_shell)
 
     def open_battle_editor(self) -> None:
-        """Show the dedicated battle workspace for the current battle."""
-        self.tabs.setCurrentWidget(self.battle_editor)
+        self.tabs.setCurrentWidget(self.battle_shell)
 
     def open_combat_move_editor(self) -> None:
-        """Show the dedicated global combat-move workspace."""
-        self.tabs.setCurrentWidget(self.combat_move_editor)
+        self.tabs.setCurrentWidget(self.combat_move_shell)
 
     def show_scene_graph(self) -> None:
-        self.tabs.setCurrentWidget(self.scene_graph)
+        self.tabs.setCurrentWidget(self.graph_shell)
+
+    def focus_definition(self, selection: DefinitionSelection | None) -> None:
+        if selection is None:
+            return
+        if selection.kind is ContentKind.SCENE:
+            self.open_scene_editor()
+        elif selection.kind is ContentKind.BATTLE:
+            self.open_battle_editor()
+        elif selection.kind is ContentKind.MOVE:
+            self.open_combat_move_editor()
+        elif selection.kind in {ContentKind.ANIMATION, ContentKind.AUDIO}:
+            self.tabs.setCurrentWidget(self.asset_shell)
+        else:
+            self.tabs.setCurrentIndex(0)
+
+    def focus_graph_navigation(self, edge: SceneGraphEdge) -> None:
+        self.show_scene_graph()
+        self.graph_navigation.focus_path(edge.source_path)
+
+    def save_layout(self, settings: Any) -> None:
+        for key, shell in self._shells.items():
+            settings.setValue(f"toolSplitter/{key}", shell.splitter.saveState())
+
+    def restore_layout(self, settings: Any) -> None:
+        for key, shell in self._shells.items():
+            state = settings.value(f"toolSplitter/{key}")
+            if state:
+                shell.splitter.restoreState(state)
+
+    def _dialogue_scene_selected(self, selection: object) -> None:
+        if isinstance(selection, DefinitionSelection):
+            self.scene_navigator_selected.emit(selection)
+            self.tabs.setCurrentWidget(self.dialogue_shell)
+
+    def _battle_selected(self, selection: object) -> None:
+        if isinstance(selection, DefinitionSelection):
+            self.scene_navigator_selected.emit(selection)
+            self.tabs.setCurrentWidget(self.battle_shell)
+
+    def _move_selected(self, selection: object) -> None:
+        if isinstance(selection, DefinitionSelection):
+            self.scene_navigator_selected.emit(selection)
+            self.tabs.setCurrentWidget(self.combat_move_shell)
+
+    def _on_dialogue_entry(self, selection: object) -> None:
+        self.dialogue_entry_selected.emit(selection)
+        self.dialogue_context.set_context("Dialogue Entry" if selection is not None else "Dialogue Context", str(selection or "Select a dialogue entry."))
 
 
 def _project_summary(project: StoryProject, diagnostics: Diagnostics) -> str:
@@ -186,3 +362,6 @@ def _project_summary(project: StoryProject, diagnostics: Diagnostics) -> str:
         f"Diagnostics: {len(diagnostics)} ({len(diagnostics.errors)} errors, "
         f"{len(diagnostics.warnings)} warnings)"
     )
+
+
+__all__ = ["ContextSummary", "ToolShell", "WorkspaceWidget"]

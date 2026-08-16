@@ -7,7 +7,7 @@ from .property_editors import AssetPathEditor, PropertyEditorFactory, ReferenceC
 from .scene_editor import ResizeHandleItem, SceneCanvasView, SceneEditorWidget, SceneGraphicsItem
 from .navigation_panel import NavigationPanel
 from .dialogue_editor import DialogueEditorWidget
-from .workspace import WorkspaceWidget
+from .workspace import ContextSummary, ToolShell, WorkspaceTabs, WorkspaceWidget
 from .test_state import TestStateDialog
 from .condition_editor import ConditionEditorWidget
 from .asset_browser import AssetBrowserDialog, AssetBrowserWidget
@@ -30,6 +30,9 @@ __all__ = [
     "NavigationPanel",
     "DialogueEditorWidget",
     "WorkspaceWidget",
+    "ToolShell",
+    "WorkspaceTabs",
+    "ContextSummary",
     "TestStateDialog",
     "ConditionEditorWidget",
     "AssetBrowserDialog",

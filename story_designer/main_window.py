@@ -48,7 +48,7 @@ from .models import (
     ProjectValidationError,
     ProjectSession,
 )
-from .widgets import AssetBrowserWidget, DiagnosticsWidget, InspectorWidget, ProjectBrowser, WorkspaceWidget
+from .widgets import DiagnosticsWidget, WorkspaceWidget
 from .models import SceneElementSelection, SceneGraphEdge
 from .widgets.test_state import TestStateDialog
 from .services.runtime_test import (
@@ -87,15 +87,19 @@ class MainWindow(QMainWindow):
         self._test_stop_was_requested = False
         self._closing = False
 
-        self.browser = ProjectBrowser()
-        self.asset_browser = AssetBrowserWidget()
-        self.inspector = InspectorWidget(self.session)
         self.workspace = WorkspaceWidget(self.session)
+        # Compatibility aliases for integrations that historically accessed
+        # these widgets from MainWindow.  They now live in focused tools.
+        self.browser = self.workspace.overview_browser
+        self.asset_browser = self.workspace.asset_browser
+        self.inspector = self.workspace.inspector
         self.diagnostics = DiagnosticsWidget()
         self.setCentralWidget(self.workspace)
         self._create_docks()
         self._create_menus()
         self.browser.selection_changed.connect(self._on_browser_selection)
+        self.workspace.scene_navigator_selected.connect(self._on_tool_navigator_selection)
+        self.workspace.graph_navigator_selected.connect(self._on_graph_navigator_selection)
         self.workspace.new_story_requested.connect(self.new_story)
         self.workspace.open_story_requested.connect(self.open_story)
         self.workspace.scene_element_selected.connect(self._on_scene_element_selection)
@@ -110,6 +114,7 @@ class MainWindow(QMainWindow):
         self.workspace.graph_scene_selected.connect(self._on_graph_selection)
         self.workspace.graph_scene_open_requested.connect(self._open_graph_scene)
         self.workspace.graph_open_navigation.connect(self._open_graph_navigation)
+        self.workspace.graph_navigation.navigation_changed.connect(self._on_local_value_change)
         self.workspace.battle_editor.test_requested.connect(self.test_current_battle)
         self.workspace.combat_move_editor.test_requested.connect(self.test_current_move)
         self.workspace.battle_editor.open_move_requested.connect(self._open_move_definition)
@@ -120,31 +125,31 @@ class MainWindow(QMainWindow):
         self._refresh_views()
 
     def _create_docks(self) -> None:
+        # Old saved dock layouts must not resurrect a second Project Browser or
+        # Inspector.  Keep lightweight compatibility handles for callers that
+        # inspect these attributes, but put all authoring UI in ToolShells.
         self.project_dock = QDockWidget("Project", self)
         self.project_dock.setObjectName("ProjectDock")
         self.project_dock.setMinimumWidth(280)
-        self.project_dock.setWidget(self.browser)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.project_dock)
-        self.resizeDocks([self.project_dock], [310], Qt.Orientation.Horizontal)
+        self.project_dock.setWidget(QWidget())
+        self.project_dock.hide()
 
         self.inspector_dock = QDockWidget("Inspector", self)
         self.inspector_dock.setObjectName("InspectorDock")
-        self.inspector_dock.setWidget(self.inspector)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
+        self.inspector_dock.setWidget(QWidget())
+        self.inspector_dock.hide()
 
         self.diagnostics_dock = QDockWidget("Diagnostics", self)
         self.diagnostics_dock.setObjectName("DiagnosticsDock")
         self.diagnostics_dock.setWidget(self.diagnostics)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.diagnostics_dock)
-
+        self.diagnostics_dock.hide()
+        # Kept as an attribute for API compatibility; Assets is now a top-level
+        # tool and never a simultaneous global dock.
         self.assets_dock = QDockWidget("Assets", self)
         self.assets_dock.setObjectName("AssetsDock")
-        self.assets_dock.setWidget(self.asset_browser)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.assets_dock)
-        self.tabifyDockWidget(self.diagnostics_dock, self.assets_dock)
-        self.assets_dock.visibilityChanged.connect(
-            lambda visible: self.asset_browser.stop_preview() if not visible else None
-        )
+        self.assets_dock.setWidget(QWidget())
+        self.assets_dock.hide()
 
     def _create_menus(self) -> None:
         file_menu = self.menuBar().addMenu("File")
@@ -191,10 +196,7 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self.revert_action)
 
         view_menu = self.menuBar().addMenu("View")
-        view_menu.addAction(self.project_dock.toggleViewAction())
-        view_menu.addAction(self.inspector_dock.toggleViewAction())
         view_menu.addAction(self.diagnostics_dock.toggleViewAction())
-        view_menu.addAction(self.assets_dock.toggleViewAction())
         self.scene_graph_action = QAction("Scene Graph", self)
         self.scene_graph_action.setShortcut(QKeySequence("Ctrl+Shift+G"))
         self.scene_graph_action.triggered.connect(self.workspace.show_scene_graph)
@@ -865,11 +867,25 @@ class MainWindow(QMainWindow):
 
     def _on_browser_selection(self, selection: DefinitionSelection | None) -> None:
         self.session.select(selection)
+        self.workspace.focus_definition(selection)
+        self._refresh_views()
+
+    def _on_tool_navigator_selection(self, selection: DefinitionSelection | None) -> None:
+        """Route a local tool selection without exposing global project state."""
+
+        self.session.select(selection)
+        self.workspace.focus_definition(selection)
+        self._refresh_views()
+
+    def _on_graph_navigator_selection(self, selection: DefinitionSelection | None) -> None:
+        self.session.select(selection)
+        self.workspace.show_scene_graph()
         self._refresh_views()
 
     def _on_graph_selection(self, selection: DefinitionSelection | None) -> None:
         """Route graph node selection through the normal project selection."""
         self.session.select(selection)
+        self.workspace.show_scene_graph()
         self._refresh_views()
 
     def _open_graph_scene(self, scene_id: str) -> None:
@@ -904,9 +920,9 @@ class MainWindow(QMainWindow):
         if entry is None:
             return
         self.session.select(DefinitionSelection(ContentKind.SCENE, edge.source_scene_id, entry.source))
-        self.workspace.open_scene_editor()
+        self.workspace.show_scene_graph()
         self._refresh_views()
-        self.workspace.scene_editor.focus_navigation_path(edge.source_path)
+        self.workspace.focus_graph_navigation(edge)
 
     def _open_destination_scene(self, scene_id: str) -> None:
         project = self.session.project
@@ -916,6 +932,7 @@ class MainWindow(QMainWindow):
         if entry is None:
             return
         self.session.select(DefinitionSelection("scene", scene_id, entry.source))
+        self.workspace.open_scene_editor()
         self._refresh_views()
         self.statusBar().showMessage(f"Opened destination scene {scene_id}")
 
@@ -1059,11 +1076,13 @@ class MainWindow(QMainWindow):
 
     def _restore_window_state(self) -> None:
         geometry = self.settings.value("windowGeometry")
-        state = self.settings.value("windowState")
         if geometry:
             self.restoreGeometry(geometry)
-        if state:
-            self.restoreState(state)
+        # Version 2 intentionally ignores the old dock topology.  Recent
+        # stories and unrelated settings remain intact while splitters are
+        # restored by the focused ToolShells below.
+        if self.settings.value("workspaceLayoutVersion", 0) == 2:
+            self.workspace.restore_layout(self.settings)
 
     def _remember_recent(self, root: Path) -> None:
         recent = [str(root), *self._recent_paths()]
@@ -1121,7 +1140,8 @@ class MainWindow(QMainWindow):
         self._closing = True
         self._stop_test_process()
         self.settings.setValue("windowGeometry", self.saveGeometry())
-        self.settings.setValue("windowState", self.saveState())
+        self.settings.setValue("workspaceLayoutVersion", 2)
+        self.workspace.save_layout(self.settings)
         event.accept()
 
     def _stop_test_process(self) -> None:
