@@ -10,6 +10,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
 import yaml
@@ -17,7 +18,52 @@ import yaml
 from .diagnostics import StorySourceError
 
 
+@dataclass(frozen=True)
+class AssetCategorySpec:
+    """Core-owned metadata for one Designer/runtime asset category."""
+
+    key: str
+    label: str
+    extensions: frozenset[str] = frozenset()
+    semantic: bool = False
+
+
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".gif"})
+AUDIO_EXTENSIONS = frozenset({".wav", ".ogg", ".mp3"})
+FONT_EXTENSIONS = frozenset({".ttf", ".otf"})
+TEXT_ART_EXTENSIONS = frozenset({".txt"})
+
+# Shared metadata for Core discovery and Designer filtering.
+ASSET_CATEGORY_SPECS = MappingProxyType({
+    "backgrounds": AssetCategorySpec("backgrounds", "Backgrounds", IMAGE_EXTENSIONS | TEXT_ART_EXTENSIONS),
+    "sprites": AssetCategorySpec("sprites", "Sprites", IMAGE_EXTENSIONS | TEXT_ART_EXTENSIONS),
+    "items": AssetCategorySpec("items", "Item Images", IMAGE_EXTENSIONS),
+    "music": AssetCategorySpec("music", "Music", AUDIO_EXTENSIONS),
+    "sfx": AssetCategorySpec("sfx", "Sound Effects", AUDIO_EXTENSIONS),
+    "fonts": AssetCategorySpec("fonts", "Fonts", FONT_EXTENSIONS),
+    "animation": AssetCategorySpec("animation", "Animations", frozenset({".yaml"}), semantic=True),
+})
+SUPPORTED_ASSET_EXTENSIONS = MappingProxyType({
+    key: spec.extensions for key, spec in ASSET_CATEGORY_SPECS.items()
+})
+ASSET_CATEGORY_LABELS = MappingProxyType({
+    key: spec.label for key, spec in ASSET_CATEGORY_SPECS.items()
+})
+_ASSET_CATEGORY_ALIASES = {
+    "animation": "animation",
+    "animations": "animation",
+    "font": "fonts",
+    "fonts": "fonts",
+    "item": "items",
+    "items": "items",
+    "background": "backgrounds",
+    "backgrounds": "backgrounds",
+    "sprite": "sprites",
+    "sprites": "sprites",
+    "sound": "sfx",
+    "sfx": "sfx",
+    "music": "music",
+}
 
 
 @dataclass(frozen=True)
@@ -43,6 +89,10 @@ class AssetRecord:
     @property
     def is_image(self) -> bool:
         return self.resolved_path is not None and self.resolved_path.suffix.lower() in IMAGE_EXTENSIONS
+
+    @property
+    def is_audio(self) -> bool:
+        return self.asset_kind in {"music", "sfx"} and self.resolved_path is not None
 
 
 @dataclass(frozen=True)
@@ -237,13 +287,15 @@ class StorySource:
         """Discover effective story/shared assets without loading media."""
 
         records: list[AssetRecord] = []
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[str, str, str]] = set()
         for root, source_kind in ((self.story_root / "assets", "Story"), (self.shared_assets_root, "Shared")):
             if not root.is_dir():
                 continue
             for category_dir in sorted((item for item in root.iterdir() if item.is_dir()), key=lambda item: item.name.casefold()):
-                category = category_dir.name
-                if category == "animations":
+                category = _normalise_asset_category(category_dir.name)
+                if category not in ASSET_CATEGORY_SPECS:
+                    continue
+                if category == "animation":
                     paths = sorted(
                         (item for item in category_dir.rglob("anim.yaml") if item.is_file()),
                         key=lambda item: item.as_posix().casefold(),
@@ -252,11 +304,13 @@ class StorySource:
                         reference = self.authored_asset_reference(path, "animation")
                         if not reference:
                             continue
-                        key = ("animation", reference)
+                        frames = _animation_frame_metadata(path)
+                        if frames is None:
+                            continue
+                        key = (source_kind.casefold(), "animation", reference.casefold())
                         if key in seen:
                             continue
                         seen.add(key)
-                        frames = _animation_frame_metadata(path)
                         records.append(AssetRecord(
                             reference=reference,
                             resolved_path=path,
@@ -267,11 +321,13 @@ class StorySource:
                         ))
                     continue
                 for path in sorted((item for item in category_dir.rglob("*") if item.is_file()), key=lambda item: item.as_posix().casefold()):
+                    if not _is_supported_asset_file(path, category):
+                        continue
                     reference = self.authored_asset_reference(path, category)
                     if not reference:
                         continue
-                    kind = _normalise_asset_category(category) or category
-                    key = (kind, reference)
+                    kind = category
+                    key = (source_kind.casefold(), kind, reference.casefold())
                     if key in seen:
                         continue
                     seen.add(key)
@@ -379,8 +435,37 @@ def _normalise_asset_category(category: str | None) -> str | None:
     if category is None:
         return None
     value = str(category).strip().lower()
-    aliases = {"image": "image", "images": "image", "animation": "animation", "animations": "animation"}
-    return aliases.get(value, value)
+    return _ASSET_CATEGORY_ALIASES.get(value, value)
+
+
+def canonical_asset_category(category: str | None) -> str | None:
+    """Normalize category aliases without coupling callers to folder names."""
+
+    return _normalise_asset_category(category)
+
+
+def asset_category_label(category: str | None) -> str:
+    """Return the human-facing label for a canonical category key."""
+
+    canonical = _normalise_asset_category(category)
+    return ASSET_CATEGORY_LABELS.get(canonical or "", str(category or "Assets").title())
+
+
+def _is_supported_asset_file(path: Path, category: str) -> bool:
+    name = path.name
+    if name.startswith(".") or name.endswith("~"):
+        return False
+    if name.casefold().endswith((".bak", ".tmp", ".swp")):
+        return False
+    spec = ASSET_CATEGORY_SPECS.get(category)
+    return spec is not None and path.suffix.casefold() in spec.extensions
+
+
+def is_supported_asset_file(path: str | Path, category: str | None) -> bool:
+    """Return whether a physical file is consumable in ``category``."""
+
+    canonical = _normalise_asset_category(category)
+    return canonical is not None and _is_supported_asset_file(Path(path), canonical)
 
 
 def _asset_kinds_compatible(actual: str, expected: str) -> bool:
@@ -393,13 +478,14 @@ def _asset_kinds_compatible(actual: str, expected: str) -> bool:
     return actual == expected or actual.rstrip("s") == expected.rstrip("s")
 
 
-def _animation_frame_metadata(path: Path) -> Mapping[str, Any]:
+def _animation_frame_metadata(path: Path) -> Mapping[str, Any] | None:
     """Read only lightweight animation metadata for browser details."""
 
     try:
         with open(path, "r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle)
-    except (OSError, yaml.YAMLError):
-        return {"frame_count": 0}
-    frames = data.get("frames") if isinstance(data, Mapping) else None
-    return {"frame_count": len(frames) if isinstance(frames, list) else 0}
+    except (OSError, UnicodeError, yaml.YAMLError):
+        return None
+    if not isinstance(data, Mapping) or not isinstance(data.get("frames"), list):
+        return None
+    return {"frame_count": len(data["frames"])}

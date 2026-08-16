@@ -279,6 +279,7 @@ class BattleEditorWidget(QWidget):
         if self.session is None or self._selection is None:
             return
         field_names = {
+            "enemy": ("name", "hp", "attack", "defense", "sprite"),
             # IDs are stable authored references and are intentionally not
             # renamed by this foundation editor.
             "enemy_move": ("name", "pattern", "weight", "cooldown", "telegraph_duration"),

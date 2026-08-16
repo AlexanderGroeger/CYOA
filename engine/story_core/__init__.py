@@ -100,7 +100,19 @@ from .serialization import (
     serialize_project,
     write_serialized_project,
 )
-from .source import AssetRecord, SourceDocument, StorySource, StorySourceError
+from .source import (
+    ASSET_CATEGORY_LABELS,
+    ASSET_CATEGORY_SPECS,
+    SUPPORTED_ASSET_EXTENSIONS,
+    AssetCategorySpec,
+    AssetRecord,
+    SourceDocument,
+    StorySource,
+    StorySourceError,
+    asset_category_label,
+    canonical_asset_category,
+    is_supported_asset_file,
+)
 
 
 __all__ = [
@@ -168,6 +180,13 @@ __all__ = [
     "serialize_project",
     "SourceDocument",
     "AssetRecord",
+    "AssetCategorySpec",
+    "ASSET_CATEGORY_LABELS",
+    "ASSET_CATEGORY_SPECS",
+    "SUPPORTED_ASSET_EXTENSIONS",
+    "asset_category_label",
+    "canonical_asset_category",
+    "is_supported_asset_file",
     "StoryAction",
     "StoryCondition",
     "StoryCoreError",

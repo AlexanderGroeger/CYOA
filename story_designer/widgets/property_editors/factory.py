@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from ...models import PropertyDescriptor
 from engine.story_core.schema import MISSING
+from engine.story_core import is_supported_asset_file
 from ..condition_editor import ConditionEditorWidget
 
 
@@ -132,6 +133,7 @@ class AssetPathEditor(_IntentMixin, QWidget):
         *,
         story_root: Path | None = None,
         asset_kind: str | None = None,
+        asset_label: str | None = None,
         project: Any | None = None,
         source: Any | None = None,
         parent: QWidget | None = None,
@@ -140,6 +142,7 @@ class AssetPathEditor(_IntentMixin, QWidget):
         self._init_intent()
         self.story_root = story_root
         self.asset_kind = asset_kind
+        self.asset_label = asset_label
         self.project = project
         self.source = source or getattr(project, "source", None)
         self.line_edit = QLineEdit(self)
@@ -170,6 +173,7 @@ class AssetPathEditor(_IntentMixin, QWidget):
         dialog = AssetBrowserDialog(
             self.source or self.project,
             expected_kind=self.asset_kind,
+            picker_category=self.asset_kind,
             current_reference=self.text(),
             parent=self,
         )
@@ -185,6 +189,13 @@ class AssetPathEditor(_IntentMixin, QWidget):
         candidate = Path(selected)
         source = self.source or getattr(self.project, "source", None)
         if source is not None:
+            if self.asset_kind and not is_supported_asset_file(candidate, self.asset_kind):
+                QMessageBox.warning(
+                    self,
+                    "Unsupported asset",
+                    f"This file is not a supported {self.asset_kind} asset.",
+                )
+                return
             reference = source.authored_asset_reference(candidate, self.asset_kind)
             if reference is None:
                 QMessageBox.warning(
@@ -257,6 +268,7 @@ class PropertyEditorFactory:
             return AssetPathEditor(
                 story_root=story_root,
                 asset_kind=descriptor.asset_kind,
+                asset_label=descriptor.display_name,
                 project=project,
                 source=getattr(project, "source", None),
                 parent=parent,

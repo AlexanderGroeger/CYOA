@@ -48,7 +48,7 @@ from .property_editors import AssetPathEditor
 class _ValueEditor(QWidget):
     value_edited = Signal(object)
 
-    def __init__(self, kind: str, value: Any, *, enum_values: tuple[Any, ...] = (), minimum: Any = None, maximum: Any = None, asset_kind: str | None = None, project: Any = None, story_root: Path | None = None, parent: QWidget | None = None) -> None:
+    def __init__(self, kind: str, value: Any, *, enum_values: tuple[Any, ...] = (), minimum: Any = None, maximum: Any = None, asset_kind: str | None = None, asset_label: str | None = None, project: Any = None, story_root: Path | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.kind = kind
         self._initializing = True
@@ -76,7 +76,7 @@ class _ValueEditor(QWidget):
             control.setCurrentIndex(index if index >= 0 else 0)
             control.currentIndexChanged.connect(lambda index: self._emit(control.itemData(index)))
         elif kind == "asset":
-            control = AssetPathEditor(story_root=story_root, asset_kind=asset_kind, project=project, parent=self)
+            control = AssetPathEditor(story_root=story_root, asset_kind=asset_kind, asset_label=asset_label, project=project, parent=self)
             control.setText("" if value is MISSING or value is None else str(value))
             control.value_edited.connect(self._emit)
         else:
@@ -382,7 +382,7 @@ class CombatMoveEditorWidget(QWidget):
         for field in self.model.qte_fields(self.current_level):
             if not field.supported or field.spec is None:
                 continue
-            editor = _ValueEditor(field.spec.value_type, field.effective_value, enum_values=field.spec.enum_values, minimum=field.spec.minimum, maximum=field.spec.maximum, asset_kind=field.spec.asset_kind, project=self.session.project if self.session else None, story_root=self.session.story_root if self.session else None, parent=self)
+            editor = _ValueEditor(field.spec.value_type, field.effective_value, enum_values=field.spec.enum_values, minimum=field.spec.minimum, maximum=field.spec.maximum, asset_kind=field.spec.asset_kind, asset_label=field.label, project=self.session.project if self.session else None, story_root=self.session.story_root if self.session else None, parent=self)
             editor.value_edited.connect(lambda value, path=field.path: self._set_qte_field(path, value))
             self._fields[field.path] = editor
             label = f"{field.label}{'' if field.is_authored else ' (inherited)'}"

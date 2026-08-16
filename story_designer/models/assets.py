@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-from engine.story_core import AssetRecord, StorySource
+from engine.story_core import (
+    ASSET_CATEGORY_SPECS,
+    AssetRecord,
+    StorySource,
+    canonical_asset_category,
+)
 
 
 class AssetBrowserModel:
@@ -36,10 +41,15 @@ class AssetBrowserModel:
         asset_kind: str | None = None,
         source_kind: str | None = None,
         expected_kind: str | None = None,
+        categories: Iterable[str] | None = None,
     ) -> tuple[AssetRecord, ...]:
         needle = str(query).strip().casefold()
-        kind = str(asset_kind or "").strip().casefold()
+        kind = canonical_asset_category(asset_kind) or str(asset_kind or "").strip().casefold()
         origin = str(source_kind or "").strip().casefold()
+        allowed = {
+            canonical_asset_category(value) or str(value).strip().casefold()
+            for value in categories or ()
+        }
         values: list[AssetRecord] = []
         for record in self.records:
             searchable = " ".join((record.display_name, record.reference, record.asset_kind, record.source_kind)).casefold()
@@ -47,12 +57,26 @@ class AssetBrowserModel:
                 continue
             if kind and kind != "all" and not _kind_matches(record, kind):
                 continue
+            if allowed and not any(_kind_matches(record, value) for value in allowed):
+                continue
             if origin and origin != "all" and record.source_kind.casefold() != origin:
                 continue
             values.append(record)
         if expected_kind:
             values.sort(key=lambda record: (0 if _kind_matches(record, expected_kind.casefold()) else 1, record.reference.casefold()))
         return tuple(values)
+
+    def available_categories(self) -> tuple[str, ...]:
+        """Unique canonical categories represented by the current catalog."""
+
+        found = {canonical_asset_category(record.asset_kind) or record.asset_kind for record in self.records}
+        ordered = [key for key in ASSET_CATEGORY_SPECS if key in found]
+        return tuple(ordered + sorted(found.difference(ordered)))
+
+    def available_sources(self) -> tuple[str, ...]:
+        """Unique logical source identities represented by the current catalog."""
+
+        return tuple(kind for kind in ("Story", "Shared") if any(record.source_kind == kind for record in self.records))
 
     def compatible(self, expected_kind: str | None) -> tuple[AssetRecord, ...]:
         return self.filtered(expected_kind=expected_kind)
@@ -64,8 +88,8 @@ class AssetBrowserModel:
 
 
 def _kind_matches(record: AssetRecord, expected: str) -> bool:
-    expected = expected.rstrip("s")
-    actual = record.asset_kind.casefold().rstrip("s")
+    expected = canonical_asset_category(expected) or expected.rstrip("s")
+    actual = canonical_asset_category(record.asset_kind) or record.asset_kind.casefold().rstrip("s")
     if expected in {"", "all", "asset"}:
         return True
     if expected in {"image", "text-art", "textart"}:

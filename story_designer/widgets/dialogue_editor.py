@@ -619,6 +619,7 @@ class DialogueEditorWidget(QWidget):
                 source=self.project.source if self.project is not None else None,
                 project=self.project,
                 asset_kind=field.asset_kind,
+                asset_label=field.display_name,
             )
             widget.setText("" if value is None else str(value))
             widget.value_edited.connect(lambda edited, key=field.key: self._commit_action_field(key, edited))

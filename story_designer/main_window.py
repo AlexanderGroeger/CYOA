@@ -141,6 +141,9 @@ class MainWindow(QMainWindow):
         self.assets_dock.setWidget(self.asset_browser)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.assets_dock)
         self.tabifyDockWidget(self.diagnostics_dock, self.assets_dock)
+        self.assets_dock.visibilityChanged.connect(
+            lambda visible: self.asset_browser.stop_preview() if not visible else None
+        )
 
     def _create_menus(self) -> None:
         file_menu = self.menuBar().addMenu("File")

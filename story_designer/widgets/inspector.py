@@ -595,6 +595,7 @@ class InspectorWidget(QWidget):
                 source=self._project.source if self._project is not None else None,
                 project=self._project,
                 asset_kind=field.asset_kind,
+                asset_label=field.display_name,
                 parent=self.look_region_action_fields_widget,
             )
             widget.setText("" if value is None else str(value))
@@ -788,6 +789,7 @@ class InspectorWidget(QWidget):
             source=self._project.source if self._project is not None else None,
             project=self._project,
             asset_kind="sprites",
+            asset_label="Sprite",
             parent=self.scene_geometry_box,
         )
         editor.setText(str(authored.get("sprite", "")))
