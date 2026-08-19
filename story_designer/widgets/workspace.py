@@ -24,6 +24,7 @@ from .battle_editor import BattleEditorWidget
 from .combat_move_editor import CombatMoveEditorWidget
 from .dialogue_editor import DialogueEditorWidget
 from .inspector import InspectorWidget
+from .item_editor import ItemNavigator, ItemPreviewWidget, ItemPropertiesWidget
 from .navigation_panel import NavigationPanel
 from .project_browser import ProjectBrowser
 from .scene_editor import SceneEditorWidget
@@ -118,6 +119,10 @@ class WorkspaceWidget(QWidget):
     open_story_requested = Signal()
     scene_navigator_selected = Signal(object)
     graph_navigator_selected = Signal(object)
+    item_navigator_selected = Signal(object)
+    item_changed = Signal(object)
+    new_item_requested = Signal()
+    item_open_move_requested = Signal(str)
 
     def __init__(self, session: ProjectSession | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -200,6 +205,16 @@ class WorkspaceWidget(QWidget):
         self.asset_shell = ToolShell(asset_nav, self.asset_browser, ContextSummary("Asset Preview"), object_name="assets")
         self.tabs.addTab(self.asset_shell, "Assets")
 
+        self.item_navigator = ItemNavigator()
+        self.item_preview = ItemPreviewWidget(session)
+        self.item_properties = ItemPropertiesWidget(session)
+        self.item_shell = ToolShell(self.item_navigator, self.item_preview, self.item_properties, object_name="items")
+        self.tabs.addTab(self.item_shell, "Items")
+        self.item_navigator.selection_changed.connect(self.item_navigator_selected)
+        self.item_navigator.new_item_requested.connect(self.new_item_requested)
+        self.item_properties.state_changed.connect(self._item_properties_changed)
+        self.item_properties.open_move_requested.connect(self.item_open_move_requested)
+
         self._shells = {
             "project": overview_shell,
             "scenes": self.scene_shell,
@@ -208,6 +223,7 @@ class WorkspaceWidget(QWidget):
             "battles": self.battle_shell,
             "combatMoves": self.combat_move_shell,
             "assets": self.asset_shell,
+            "items": self.item_shell,
         }
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -220,7 +236,7 @@ class WorkspaceWidget(QWidget):
         self.welcome_new_button.setVisible(True)
         self.welcome_open_button.setVisible(True)
         self.tabs.setCurrentIndex(0)
-        for browser in (self.overview_browser, self.scene_navigator, self.dialogue_navigator, self.graph_navigator, self.battle_navigator, self.move_navigator):
+        for browser in (self.overview_browser, self.scene_navigator, self.dialogue_navigator, self.graph_navigator, self.battle_navigator, self.move_navigator, self.item_navigator):
             browser.clear_project()
         self.scene_editor.clear()
         self.dialogue_editor.clear()
@@ -229,6 +245,8 @@ class WorkspaceWidget(QWidget):
         self.battle_editor.clear()
         self.combat_move_editor.clear()
         self.inspector.clear()
+        self.item_preview.clear()
+        self.item_properties.clear()
 
     def set_state(self, project: StoryProject | None, selection: DefinitionSelection | None, definition: Any | None, diagnostics: Diagnostics) -> None:
         if project is None:
@@ -237,8 +255,13 @@ class WorkspaceWidget(QWidget):
         self.welcome_new_button.setVisible(False)
         self.welcome_open_button.setVisible(False)
         self.overview_browser.set_project(project)
-        for browser in (self.scene_navigator, self.dialogue_navigator, self.graph_navigator, self.battle_navigator, self.move_navigator):
+        for browser in (self.scene_navigator, self.dialogue_navigator, self.graph_navigator, self.battle_navigator, self.move_navigator, self.item_navigator):
             browser.set_project(project)
+        item_selection = selection if selection is not None and selection.kind is ContentKind.ITEM else None
+        item_definition = definition if item_selection is not None else None
+        item_mapping = self.session.working_mapping(item_selection) if self.session is not None and item_selection is not None else None
+        self.item_properties.set_state(project, item_selection, item_definition, diagnostics)
+        self.item_preview.set_state(project, item_selection, item_mapping)
         self.scene_graph.set_state(project, selection, definition, diagnostics)
         self.battle_editor.set_state(project, selection, definition, diagnostics)
         self.combat_move_editor.set_state(project, selection, definition, diagnostics)
@@ -263,6 +286,10 @@ class WorkspaceWidget(QWidget):
             else:
                 self.open_scene_editor()
             return
+        if selection.kind is ContentKind.ITEM:
+            self.item_navigator.select(selection)
+            self.open_items_tool()
+            return
         self.inspector.set_selection(project, selection, definition, diagnostics)
         if selection.kind is ContentKind.BATTLE:
             self.open_battle_editor()
@@ -280,6 +307,10 @@ class WorkspaceWidget(QWidget):
 
     def refresh_value_dependencies(self) -> None:
         self.scene_editor.refresh_value_dependencies()
+        if self.session is not None and self.session.selection is not None and self.session.selection.kind is ContentKind.ITEM:
+            selection = self.session.selection
+            self.item_properties.set_state(self.session.project, selection, self.session.definition(selection), self.session.diagnostics)
+            self.item_preview.set_state(self.session.project, selection, self.session.working_mapping(selection))
 
     def open_dialogue_sequence(self, sequence_id: str) -> None:
         if self.dialogue_editor.select_source(f"sequence:{sequence_id}"):
@@ -294,6 +325,9 @@ class WorkspaceWidget(QWidget):
     def open_combat_move_editor(self) -> None:
         self.tabs.setCurrentWidget(self.combat_move_shell)
 
+    def open_items_tool(self) -> None:
+        self.tabs.setCurrentWidget(self.item_shell)
+
     def show_scene_graph(self) -> None:
         self.tabs.setCurrentWidget(self.graph_shell)
 
@@ -306,6 +340,8 @@ class WorkspaceWidget(QWidget):
             self.open_battle_editor()
         elif selection.kind is ContentKind.MOVE:
             self.open_combat_move_editor()
+        elif selection.kind is ContentKind.ITEM:
+            self.open_items_tool()
         elif selection.kind in {ContentKind.ANIMATION, ContentKind.AUDIO}:
             self.tabs.setCurrentWidget(self.asset_shell)
         else:
@@ -339,6 +375,13 @@ class WorkspaceWidget(QWidget):
         if isinstance(selection, DefinitionSelection):
             self.scene_navigator_selected.emit(selection)
             self.tabs.setCurrentWidget(self.combat_move_shell)
+
+    def _item_properties_changed(self) -> None:
+        if self.session is None or self.session.selection is None or self.session.selection.kind is not ContentKind.ITEM:
+            return
+        mapping = self.session.working_mapping(self.session.selection)
+        self.item_preview.update_from_mapping(mapping or {})
+        self.item_changed.emit(self.session.selection)
 
     def _on_dialogue_entry(self, selection: object) -> None:
         self.dialogue_entry_selected.emit(selection)

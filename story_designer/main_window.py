@@ -99,6 +99,10 @@ class MainWindow(QMainWindow):
         self._create_menus()
         self.browser.selection_changed.connect(self._on_browser_selection)
         self.workspace.scene_navigator_selected.connect(self._on_tool_navigator_selection)
+        self.workspace.item_navigator_selected.connect(self._on_tool_navigator_selection)
+        self.workspace.new_item_requested.connect(lambda: self.new_definition(ContentKind.ITEM))
+        self.workspace.item_open_move_requested.connect(self._open_move_definition)
+        self.workspace.item_changed.connect(self._on_local_value_change)
         self.workspace.graph_navigator_selected.connect(self._on_graph_navigator_selection)
         self.workspace.new_story_requested.connect(self.new_story)
         self.workspace.open_story_requested.connect(self.open_story)
@@ -330,6 +334,8 @@ class MainWindow(QMainWindow):
             self.workspace.open_battle_editor()
         elif kind is ContentKind.MOVE:
             self.workspace.open_combat_move_editor()
+        elif kind is ContentKind.ITEM:
+            self.workspace.open_items_tool()
         self.statusBar().showMessage(f"Created {kind.value.replace('_', ' ')} {result.identifier}")
 
     def open_story_path(self, path: str | Path) -> bool:
